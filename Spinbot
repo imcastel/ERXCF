@@ -1,0 +1,235 @@
+
+
+if _G.ERXSpinBot then
+    warn("SpinBot already loaded!")
+    return
+end
+_G.ERXSpinBot = true
+
+repeat task.wait() until _G.WindUI and _G.Window and _G.Functions
+
+local WindUI      = _G.WindUI
+local Window      = _G.Window
+local Functions   = _G.Functions
+
+local Players          = cloneref(game:GetService("Players"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local RunService       = cloneref(game:GetService("RunService"))
+local HttpService      = cloneref(game:GetService("HttpService"))
+local LocalPlayer      = Players.LocalPlayer
+
+
+local CONFIG_FILE = "ERX/SpinBot.json"
+
+local function EnsureFolder(path)
+    if not isfolder(path) then makefolder(path) end
+end
+
+local function LoadConfig()
+    if isfile(CONFIG_FILE) then
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile(CONFIG_FILE))
+        end)
+        if ok and type(data) == "table" then return data end
+    end
+    return {}
+end
+
+local function SaveConfig(data)
+    EnsureFolder("ERX")
+    pcall(writefile, CONFIG_FILE, HttpService:JSONEncode(data))
+end
+
+local cfg = LoadConfig()
+
+
+local spinEnabled  = false
+local spinSpeed    = cfg.spinSpeed or 15  -- degrees per frame
+local spinAngle    = 0
+local spinLoop     = nil
+
+local function GetHRP()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetHumanoid()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChildWhichIsA("Humanoid")
+end
+
+local function StartSpin()
+    if spinLoop then return end
+    spinAngle = 0
+
+    spinLoop = RunService.PreRender:Connect(function()
+        local hrp = GetHRP()
+        local hum = GetHumanoid()
+        if not hrp or not hum or hum.Health <= 0 then return end
+
+        -- Don't spin if seated — looks broken and may cause issues
+        if hum.Sit then return end
+
+        spinAngle = (spinAngle + spinSpeed) % 360
+
+        -- Preserve position and vertical orientation, only rotate Y
+        local pos    = hrp.Position
+        local newCF  = CFrame.new(pos) * CFrame.Angles(0, math.rad(spinAngle), 0)
+        hrp.CFrame   = newCF
+
+        -- Zero angular velocity each frame so physics engine
+        -- doesn't fight us or accumulate angular momentum
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+local function StopSpin()
+    if spinLoop then
+        spinLoop:Disconnect()
+        spinLoop = nil
+    end
+    -- Reset angular velocity on stop so character doesn't keep drifting
+    local hrp = GetHRP()
+    if hrp then
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+-- Restart spin on character respawn so the loop stays valid
+LocalPlayer.CharacterAdded:Connect(function()
+    spinLoop = nil -- old loop is dead after respawn
+    spinAngle = 0
+    if spinEnabled then
+        task.wait(0.5) -- give character time to load
+        StartSpin()
+    end
+end)
+
+
+local SpinBotTab = Window:Tab({ Title = "SpinBot", Icon = "rotate-cw" })
+
+SpinBotTab:Section({ Title = "SpinBot" })
+
+SpinBotTab:Paragraph({
+    Title = "SpinBot",
+    Desc  = "Rapidly rotates your character on the Y axis each frame.\n"
+         .. "Spin is paused automatically while seated in a vehicle.",
+})
+
+
+local SpinToggle
+
+SpinToggle = SpinBotTab:Toggle({
+    Title    = "Enable SpinBot",
+    Desc     = "Starts / stops the spin.",
+    Icon     = "rotate-cw",
+    Value    = false,
+    Callback = function(state)
+        spinEnabled = state
+        if state then
+            StartSpin()
+            WindUI:Notify({
+                Title    = "SpinBot",
+                Content  = "SpinBot ON — spinning at " .. spinSpeed .. "°/frame",
+                Duration = 3,
+                Icon     = "rotate-cw",
+            })
+        else
+            StopSpin()
+            WindUI:Notify({
+                Title    = "SpinBot",
+                Content  = "SpinBot OFF",
+                Duration = 2,
+                Icon     = "rotate-ccw",
+            })
+        end
+    end,
+})
+
+
+SpinBotTab:Section({ Title = "Speed" })
+
+SpinBotTab:Paragraph({
+    Title = "Spin Speed",
+    Desc  = "Degrees rotated per frame. Higher = faster spin.\n"
+         .. "1–5 = slow,  10–20 = medium,  30+ = very fast.",
+})
+
+SpinBotTab:Slider({
+    Title    = "Spin Speed",
+    Desc     = "Degrees per frame (1 – 50).",
+    Step     = 1,
+    Value    = { Min = 1, Max = 50, Default = spinSpeed },
+    Callback = function(v)
+        spinSpeed     = tonumber(v) or 15
+        cfg.spinSpeed = spinSpeed
+    end,
+})
+
+-- Keybind
+SpinBotTab:Section({ Title = "Keybind" })
+
+local spinKeybindEnabled = cfg.spinKeybindEnabled ~= false
+local currentSpinKeybind = Enum.KeyCode[cfg.spinKeybind or "H"] or Enum.KeyCode.H
+
+SpinBotTab:Toggle({
+    Title    = "Enable SpinBot Keybind",
+    Desc     = "Enables the keybind to toggle SpinBot.",
+    Value    = spinKeybindEnabled,
+    Callback = function(state)
+        spinKeybindEnabled     = state
+        cfg.spinKeybindEnabled = state
+    end,
+})
+
+SpinBotTab:Keybind({
+    Title    = "SpinBot Keybind",
+    Desc     = "Key to toggle SpinBot on / off.",
+    Value    = cfg.spinKeybind or "H",
+    Callback = function(v)
+        if Enum.KeyCode[v] then
+            currentSpinKeybind = Enum.KeyCode[v]
+            cfg.spinKeybind    = v
+        end
+    end,
+})
+
+-- Config
+SpinBotTab:Section({ Title = "Config" })
+
+SpinBotTab:Button({
+    Title    = "Save Config",
+    Desc     = "Saves spin speed and keybind settings.",
+    Icon     = "save",
+    Callback = function()
+        SaveConfig(cfg)
+        WindUI:Notify({
+            Title    = "SpinBot",
+            Content  = "Config saved!",
+            Duration = 3,
+            Icon     = "check-circle",
+        })
+    end,
+})
+
+task.spawn(function()
+    UserInputService.InputBegan:Connect(function(input, processed)
+        if processed or not _G.WindUI then return end
+        if spinKeybindEnabled and input.KeyCode == currentSpinKeybind then
+            SpinToggle:Set(not spinEnabled)
+        end
+    end)
+end)
+
+SpinBotTab:Section({ Title = "Credits" })
+SpinBotTab:Paragraph({
+    Title = "SpinBot for ERX",
+    Desc  = "Made by castel0v2",
+})
+
+WindUI:Notify({
+    Title    = "SpinBot loaded",
+    Content  = "SpinBot is ready. Default keybind: H",
+    Duration = 4,
+    Icon     = "rotate-cw",
+})
