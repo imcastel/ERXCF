@@ -1,4 +1,3 @@
-if _G.ColorBlindMode then return end
 _G.ColorBlindMode = true
 
 local WindUI = _G.WindUI
