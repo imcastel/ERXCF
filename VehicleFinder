@@ -1,0 +1,81 @@
+if _G.ERX_VehicleFinder then
+    WindUI:Notify({Title = "Vehicle Finder", Content = "Already loaded!", Duration = 3})
+    return
+end
+_G.ERX_VehicleFinder = true
+
+local WindUI = _G.WindUI
+local Window = _G.Window
+local ConfigManager = Window.ConfigManager
+
+local Highlight = Instance.new("Highlight")
+Highlight.FillTransparency = 0.7
+Highlight.OutlineTransparency = 0
+Highlight.OutlineColor = Color3.fromRGB(0, 255, 255)
+Highlight.FillColor = Color3.fromRGB(0, 255, 255)
+
+local currentHighlight = nil
+
+local function FindMyVehicle()
+    if currentHighlight and currentHighlight.Parent then
+        currentHighlight:Destroy()
+        currentHighlight = nil
+    end
+
+    for _, vehicle in ipairs(workspace:FindFirstChild("Vehicles") and workspace.Vehicles:GetChildren() or {}) do
+        if vehicle:GetAttribute("Owner") == game.Players.LocalPlayer.Name or 
+           (vehicle:FindFirstChild("Seat") and vehicle.Seat:FindFirstChild("Player") and vehicle.Seat.Player.Value == game.Players.LocalPlayer) then
+            
+            currentHighlight = Highlight:Clone()
+            currentHighlight.Adornee = vehicle
+            currentHighlight.Parent = vehicle
+            
+            WindUI:Notify({
+                Title = "Vehicle Finder",
+                Content = "Your vehicle has been highlighted!",
+                Duration = 5
+            })
+            return
+        end
+    end
+
+    WindUI:Notify({
+        Title = "Vehicle Finder",
+        Content = "No owned vehicle found in the server.",
+        Duration = 4
+    })
+end
+
+local tab = Window:Tab({Title = "Vehicle Finder", Icon = "search"})
+
+tab:Section({Title = "Main"})
+tab:Button({
+    Title = "Find My Vehicle",
+    Desc = "Highlights your owned vehicle with a bright cyan outline",
+    Callback = FindMyVehicle
+})
+
+tab:Button({
+    Title = "Clear Highlight",
+    Desc = "Remove the highlight from your vehicle",
+    Callback = function()
+        if currentHighlight and currentHighlight.Parent then
+            currentHighlight:Destroy()
+            currentHighlight = nil
+        end
+        WindUI:Notify({Title = "Vehicle Finder", Content = "Highlight cleared", Duration = 3})
+    end
+})
+
+local FinderConfig = ConfigManager:CreateConfig("ERX_VehicleFinder")
+FinderConfig:Load()
+tab:Section({ Title = "Credits" })
+tab:Paragraph({
+    Title = "Vehicle Finder for ERX",
+    Desc  = "Made by castel0v2",
+})
+WindUI:Notify({
+    Title = "Vehicle Finder",
+    Content = "Loaded successfully! Click the button to highlight your car.",
+    Duration = 6
+})
