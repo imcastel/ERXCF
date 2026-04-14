@@ -48,7 +48,7 @@ end
 
 local tab = Window:Tab({Title = "Vehicle Finder", Icon = "search"})
 
-tab:Section({Title = "Main"})
+tab:Section({Title = "Car Finder"})
 tab:Button({
     Title = "Find My Vehicle",
     Desc = "It's like Apple Find My, but.... for your ERLC vehicle",
