@@ -1,0 +1,23 @@
+if _G.ColorBlindMode then return end
+_G.ColorBlindMode = true
+
+local WindUI = _G.WindUI
+local Window = _G.Window
+
+local ColorCorrection = Instance.new("ColorCorrectionEffect")
+ColorCorrection.Parent = game.Lighting
+
+local tab = Window:Tab({Title = "Color Blind", Icon = "palette"})
+
+tab:Section({Title = "Presets"})
+tab:Button({Title = "Protanopia", Callback = function() ColorCorrection.Saturation = -0.5 ColorCorrection.TintColor = Color3.fromRGB(255, 200, 150) end})
+tab:Button({Title = "Deuteranopia", Callback = function() ColorCorrection.Saturation = -0.6 ColorCorrection.TintColor = Color3.fromRGB(200, 255, 150) end})
+tab:Button({Title = "Tritanopia", Callback = function() ColorCorrection.Saturation = -0.4 ColorCorrection.TintColor = Color3.fromRGB(150, 200, 255) end})
+tab:Button({Title = "Reset", Callback = function() ColorCorrection.Saturation = 0 ColorCorrection.TintColor = Color3.new(1,1,1) end})
+
+tab:Section({ Title = "Credits" })
+tab:Paragraph({
+    Title = "Colorblind Mode for ERX",
+    Desc  = "Made by castel0v2",
+})
+WindUI:Notify({Title = "Color Blind Mode", Content = "Loaded - Use presets for better visibility", Duration = 5})
