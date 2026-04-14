@@ -32,7 +32,7 @@ local function FindMyVehicle()
             
             WindUI:Notify({
                 Title = "Vehicle Finder",
-                Content = "Your vehicle has been highlighted!",
+                Content = "Your vehicle has been found!",
                 Duration = 5
             })
             return
@@ -51,19 +51,19 @@ local tab = Window:Tab({Title = "Vehicle Finder", Icon = "search"})
 tab:Section({Title = "Main"})
 tab:Button({
     Title = "Find My Vehicle",
-    Desc = "Highlights your owned vehicle with a bright cyan outline",
+    Desc = "It's like apple find my, but.... for ERLC",
     Callback = FindMyVehicle
 })
 
 tab:Button({
-    Title = "Clear Highlight",
-    Desc = "Remove the highlight from your vehicle",
+    Title = "Get lost!",
+    Desc = "Make it impossible to find your car again. (Removes the highlight from your vehicle)",
     Callback = function()
         if currentHighlight and currentHighlight.Parent then
             currentHighlight:Destroy()
             currentHighlight = nil
         end
-        WindUI:Notify({Title = "Vehicle Finder", Content = "Highlight cleared", Duration = 3})
+        WindUI:Notify({Title = "Vehicle Finder", Content = "Car GONE! Good luck finding it now..", Duration = 3})
     end
 })
 
@@ -76,6 +76,6 @@ tab:Paragraph({
 })
 WindUI:Notify({
     Title = "Vehicle Finder",
-    Content = "Loaded successfully! Click the button to highlight your car.",
+    Content = "Loaded successfully! Click the button to find your car.",
     Duration = 6
 })
