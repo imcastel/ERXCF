@@ -1,7 +1,3 @@
-if _G.ERX_VehicleFinder then
-    WindUI:Notify({Title = "Vehicle Finder", Content = "Already loaded!", Duration = 3})
-    return
-end
 _G.ERX_VehicleFinder = true
 
 local WindUI = _G.WindUI
