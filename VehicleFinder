@@ -51,7 +51,7 @@ local tab = Window:Tab({Title = "Vehicle Finder", Icon = "search"})
 tab:Section({Title = "Main"})
 tab:Button({
     Title = "Find My Vehicle",
-    Desc = "It's like apple find my, but.... for ERLC",
+    Desc = "It's like Apple Find My, but.... for your ERLC vehicle",
     Callback = FindMyVehicle
 })
 
