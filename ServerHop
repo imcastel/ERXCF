@@ -1,0 +1,82 @@
+local WindUI = getgenv().WindUI or _G.WindUI
+local Tabs = getgenv().Tabs or _G.Tabs
+
+if not WindUI or not Tabs or not Tabs.Main then
+    WindUI = getgenv().WindUI
+    Tabs = getgenv().Tabs
+end
+
+-- Wait for ERX UI to fully load
+local startTime = tick()
+while (not Tabs or not Tabs.Main) and tick() - startTime < 15 do
+    task.wait(0.5)
+    Tabs = getgenv().Tabs or _G.Tabs
+end
+
+if not Tabs or not Tabs.Main then
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "ERX Server Hop",
+        Text = "Could not find ERX Main tab. Load ERX first!",
+        Duration = 8
+    })
+    return
+end
+
+-- Server Hop Function
+local function ServerHop()
+    local TeleportService = game:GetService("TeleportService")
+    local HttpService = game:GetService("HttpService")
+    local PlaceId = game.PlaceId
+    
+    WindUI:Notify({
+        Title = "Server Hop",
+        Content = "Searching for a new server...",
+        Duration = 3
+    })
+    
+    pcall(function()
+        local servers = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
+        local validServers = {}
+        
+        for _, v in ipairs(servers.data) do
+            if v.playing < v.maxPlayers and v.id ~= game.JobId then
+                table.insert(validServers, v)
+            end
+        end
+        
+        if #validServers > 0 then
+            local target = validServers[math.random(1, #validServers)]
+            WindUI:Notify({
+                Title = "Server Hop",
+                Content = "Hopping... (" .. target.playing .. "/" .. target.maxPlayers .. " players)",
+                Duration = 4
+            })
+            TeleportService:TeleportToPlaceInstance(PlaceId, target.id)
+        else
+            WindUI:Notify({
+                Title = "Server Hop",
+                Content = "No empty servers found. Retrying in 5s...",
+                Duration = 5
+            })
+            task.wait(5)
+            ServerHop()
+        end
+    end)
+end
+
+-- Add to Main Tab (at the bottom)
+Tabs.Main:Section({ Title = "Server Utilities" })
+
+Tabs.Main:Button({
+    Title = "Server Hop",
+    Desc = "Instantly hops to a different public server",
+    Callback = function()
+        ServerHop()
+    end,
+})
+
+WindUI:Notify({
+    Title = "Success",
+    Content = "Server Hop button has been added to the Main tab!",
+    Duration = 6
+})
