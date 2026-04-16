@@ -1,0 +1,290 @@
+_G.ERXVehicleConfigurations = true
+
+repeat task.wait() until _G.WindUI and _G.Window and _G.Functions
+
+local WindUI             = _G.WindUI
+local Window             = _G.Window
+local ConfigManager      = Window.ConfigManager
+local Players            = cloneref(game:GetService("Players"))
+local UserInputService   = cloneref(game:GetService("UserInputService"))
+local RunService         = cloneref(game:GetService("RunService"))
+local TeleportService    = cloneref(game:GetService("TeleportService"))
+local LocalPlayer        = Players.LocalPlayer
+local Workspace          = cloneref(game:GetService("Workspace"))
+local VehiclesFolder     = Workspace:WaitForChild("Vehicles", 9e9)
+
+local VCConfig = ConfigManager:CreateConfig("ERXVehicleConfigurations")
+
+local function GetDrivenVehicle()
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+	if hum and hum.Sit and hum.SeatPart and hum.SeatPart.Name == "DriverSeat" then
+		return hum.SeatPart.Parent
+	end
+end
+
+local function GetLocalPlayerCar()
+	for _, v in ipairs(VehiclesFolder:GetChildren()) do
+		if v:GetAttribute("Owner") == LocalPlayer.Name then
+			return v
+		end
+	end
+end
+
+local function GetVehicle()
+	return GetDrivenVehicle() or GetLocalPlayerCar()
+end
+
+local function GetDrive(vehicle)
+	if not vehicle or not vehicle:FindFirstChild("Drive Controller") then
+		return false, nil
+	end
+	local ok, Drive = pcall(require, vehicle:FindFirstChild("Drive Controller"))
+	return ok and Drive ~= nil, ok and Drive or nil
+end
+
+local function TryRestartVehicleUI()
+	local gui = LocalPlayer.PlayerGui:FindFirstChild("GameGui")
+	local vGui = gui and gui:FindFirstChild("VehicleGui")
+	local vInt = vGui and vGui:FindFirstChild("Vehicle Interface")
+	if vInt then
+		pcall(function()
+			vInt.Drive.Enabled = false
+			task.wait()
+			vInt.Drive.Enabled = true
+		end)
+	end
+end
+
+local function Notify(title, content, duration)
+	WindUI:Notify({
+		Title = "Vehicle Configurations - " .. title,
+		Content = content,
+		Duration = duration or 4,
+	})
+end
+
+--maintab
+local ModsTab = Window:Tab({
+	Title = "Vehicle Configurations",
+	Icon = "car",
+	Locked = false,
+})
+
+---carmods
+local CarModsSection = ModsTab:Section({
+	Title = "Car Mods",
+})
+
+-- Car Rainbow
+local rainbowConnection = nil
+local originalColors = {}
+
+local rainbowToggle = ModsTab:Toggle({
+	Title = "Car Rainbow",
+	Desc = "Cycles your current vehicle's color rapidly",
+	Value = false,
+	Callback = function(state)
+		if rainbowConnection then
+			rainbowConnection:Disconnect()
+			rainbowConnection = nil
+		end
+		
+		if state then
+			local vehicle = GetVehicle()
+			if not vehicle then
+				Notify("Rainbow", "Enter a vehicle first!", 3)
+				return
+			end
+			
+			if next(originalColors) == nil then
+				for _, part in ipairs(vehicle:GetDescendants()) do
+					if part:IsA("BasePart") and part.Name ~= "CollisionPart" then
+						originalColors[part] = part.Color
+					end
+				end
+			end
+			
+			rainbowConnection = RunService.Heartbeat:Connect(function()
+				local currentVehicle = GetVehicle()
+				if not currentVehicle then return end
+				local hue = (tick() * 2) % 1
+				local color = Color3.fromHSV(hue, 1, 1)
+				for _, part in ipairs(currentVehicle:GetDescendants()) do
+					if part:IsA("BasePart") and part.Name ~= "CollisionPart" then
+						part.Color = color
+					end
+				end
+			end)
+		end
+	end,
+})
+VCConfig:Register("rainbowToggle", rainbowToggle)
+
+-- Reset Car Color
+local resetColorButton = ModsTab:Button({
+	Title = "Reset Car Color",
+	Desc = "Restores the vehicle to its exact original colors",
+	Locked = false,
+	Callback = function()
+		if rainbowConnection then
+			rainbowConnection:Disconnect()
+			rainbowConnection = nil
+		end
+		
+		local vehicle = GetVehicle()
+		if not vehicle then
+			Notify("Reset Color", "Enter a vehicle first!", 3)
+			return
+		end
+		
+		for part, originalColor in pairs(originalColors) do
+			if part and part.Parent and originalColor then
+				part.Color = originalColor
+			end
+		end
+		
+		originalColors = {}
+		
+		TryRestartVehicleUI()
+		Notify("Reset Color", "Vehicle restored to original colors", 4)
+	end,
+})
+
+-- No Brakes
+local noBrakesToggle = ModsTab:Toggle({
+	Title = "No Brakes",
+	Desc = "Completely disables braking on your current vehicle",
+	Value = false,
+	Callback = function(state)
+		local vehicle = GetVehicle()
+		if not vehicle then
+			Notify("No Brakes", "Enter a vehicle first!", 3)
+			return
+		end
+		local success, Drive = GetDrive(vehicle)
+		if not success or not Drive then return end
+		
+		if state then
+			if not Drive._originalBrakes then
+				Drive._originalBrakes = {
+					BrakeAccel = Drive.BrakeAccel,
+					BrakeDecel = Drive.BrakeDecel,
+					ABSThreshold = Drive.ABSThreshold,
+				}
+			end
+			Drive.BrakeAccel = 0
+			Drive.BrakeDecel = 0
+			Drive.ABSThreshold = 999
+		else
+			if Drive._originalBrakes then
+				Drive.BrakeAccel = Drive._originalBrakes.BrakeAccel
+				Drive.BrakeDecel = Drive._originalBrakes.BrakeDecel
+				Drive.ABSThreshold = Drive._originalBrakes.ABSThreshold
+				Drive._originalBrakes = nil
+			end
+		end
+		
+		TryRestartVehicleUI()
+		Notify("No Brakes", state and "Brakes disabled - good luck stopping!" or "Brakes restored", 4)
+	end,
+})
+VCConfig:Register("noBrakesToggle", noBrakesToggle)
+
+---misc
+local MiscSection = ModsTab:Section({
+	Title = "Misc",
+})
+
+-- Server Hop
+local serverHopButton = ModsTab:Button({
+	Title = "Server Hop",
+	Desc = "Instantly teleports you to a new server",
+	Locked = false,
+	Callback = function()
+		Notify("Server Hop", "Hopping to a new server...", 3)
+		task.wait(1)
+		pcall(function()
+			TeleportService:Teleport(game.PlaceId)
+		end)
+	end,
+})
+
+-- Anti-AFK
+local antiAfkConnection = nil
+local antiAfkToggle = ModsTab:Toggle({
+	Title = "Anti-AFK",
+	Desc = "Prevents being kicked for AFK by simulating small movements",
+	Value = false,
+	Callback = function(state)
+		if antiAfkConnection then
+			antiAfkConnection:Disconnect()
+			antiAfkConnection = nil
+		end
+		
+		if state then
+			antiAfkConnection = RunService.Heartbeat:Connect(function()
+				local character = LocalPlayer.Character
+				if not character then return end
+				
+				local root = character:FindFirstChild("HumanoidRootPart")
+				if not root then return end
+				
+				root.CFrame = root.CFrame * CFrame.Angles(0, math.rad(0.8), 0)
+				
+				if math.random(1, 80) == 1 then
+					root.AssemblyLinearVelocity = root.AssemblyLinearVelocity + Vector3.new(
+						math.random(-2, 2),
+						0.5,
+						math.random(-2, 2)
+					)
+				end
+			end)
+			
+			Notify("Anti-AFK", "Enabled - You will no longer be kicked for inactivity", 4)
+		else
+			Notify("Anti-AFK", "Disabled", 3)
+		end
+	end,
+})
+VCConfig:Register("antiAfkToggle", antiAfkToggle)
+
+--config
+local ConfigSection = ModsTab:Section({
+	Title = "Config",
+})
+
+local saveConfigButton = ModsTab:Button({
+	Title = "Save Config",
+	Desc = "Saves your Vehicle Configurations settings",
+	Locked = false,
+	Callback = function()
+		VCConfig:Save()
+		Notify("Config", "All settings saved successfully!", 3)
+	end,
+})
+
+local addToCustomButton = ModsTab:Button({
+	Title = "Add to Custom Features",
+	Desc = "Adds this entire script to ERX so it loads automatically",
+	Locked = false,
+	Callback = function()
+		local customPath = "WindUI/CustomFeatures/CustomFeatures.lua"
+		local codeToAppend = [[
+loadstring(game:HttpGet(""))() -- Vehicle Configurations
+]]
+		if not isfile(customPath) then
+			writefile(customPath, "")
+		end
+		appendfile(customPath, "\n" .. codeToAppend)
+		Notify("Loader", "Vehicle Configurations added to auto-load!", 5)
+	end,
+})
+-- creds
+ModsTab:Section({ Title = "Credits" })
+ModsTab:Paragraph({
+    Title = "VehicleConfigurations for ERX",
+    Desc = "made by castel and ai",
+})
+
+VCConfig:Load()
