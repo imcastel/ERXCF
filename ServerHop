@@ -1,3 +1,5 @@
+repeat task.wait() until _G.WindUI and _G.Tabs
+
 local WindUI = getgenv().WindUI or _G.WindUI
 local Tabs = getgenv().Tabs or _G.Tabs
 
