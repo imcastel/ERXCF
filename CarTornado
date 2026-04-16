@@ -1,0 +1,132 @@
+
+repeat task.wait() until _G.WindUI and _G.Tabs
+
+local WindUI = getgenv().WindUI or _G.WindUI
+local Tabs = getgenv().Tabs or _G.Tabs
+
+-- Wait for ERX to fully load
+local startTime = tick()
+while (not Tabs or not Tabs.VehicleMods) and tick() - startTime < 15 do
+    task.wait(0.5)
+    Tabs = getgenv().Tabs or _G.Tabs
+end
+
+if not Tabs or not Tabs.VehicleMods then
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "ERX Car Tornado",
+        Text = "Could not find ERX Vehicle Mods tab. Load ERX first!",
+        Duration = 8
+    })
+    return
+end
+
+
+local CarTornadoEnabled = false
+local TornadoConnection = nil
+local TornadoRadius = 120
+local PullStrength = 4500
+local SpinStrength = 2800
+
+local function StartCarTornado()
+    if TornadoConnection then return end
+    
+    TornadoConnection = game:GetService("RunService").Heartbeat:Connect(function()
+        if not CarTornadoEnabled then return end
+        
+        local Player = game.Players.LocalPlayer
+        local Character = Player.Character
+        if not Character or not Character:FindFirstChild("HumanoidRootPart") then return end
+        
+        local Center = Character.HumanoidRootPart.Position + Vector3.new(0, 15, 0)
+        
+        for _, Vehicle in ipairs(workspace.Vehicles:GetChildren()) do
+            if Vehicle:IsA("Model") then
+                local Primary = Vehicle.PrimaryPart or Vehicle:FindFirstChild("CollisionPart") or Vehicle:FindFirstChildWhichIsA("BasePart")
+                if Primary then
+                    local Pos = Primary.Position
+                    local Diff = Center - Pos
+                    local Dist = Diff.Magnitude
+                    
+                    if Dist > 5 and Dist < TornadoRadius then
+                        -- Pull toward center (stronger when closer)
+                        local Pull = Diff.Unit * (PullStrength / (Dist + 10))
+                        
+                        -- Tornado spin (horizontal circle)
+                        local Perp = Vector3.new(-Diff.Z, 0, Diff.X).Unit * SpinStrength
+                        
+                        -- Upward lift for classic tornado look
+                        local Lift = Vector3.new(0, 1200, 0)
+                        
+                        -- Apply + dampen old velocity (smooth & powerful)
+                        Primary.AssemblyLinearVelocity = (Primary.AssemblyLinearVelocity * 0.75) + Pull + Perp + Lift
+                        
+                        -- Extra spin on Y axis
+                        Primary.AssemblyAngularVelocity = Primary.AssemblyAngularVelocity + Vector3.new(0, 80, 0)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function StopCarTornado()
+    if TornadoConnection then
+        TornadoConnection:Disconnect()
+        TornadoConnection = nil
+    end
+end
+
+
+
+Tabs.VehicleMods:Section({ Title = "Advanced Physics" })
+
+Tabs.VehicleMods:Toggle({
+    Title = "Car Tornado",
+    Desc = "Sucks cars in + spins them into a tornado around you",
+    Value = false,
+    Callback = function(Value)
+        CarTornadoEnabled = Value
+        if Value then
+            StartCarTornado()
+            WindUI:Notify({
+                Title = "Car Tornado",
+                Content = "Enabled - Cars will now get sucked into the tornado!",
+                Duration = 4
+            })
+        else
+            StopCarTornado()
+            WindUI:Notify({
+                Title = "Car Tornado",
+                Content = "Disabled",
+                Duration = 3
+            })
+        end
+    end,
+})
+
+-- Optional sliders (uncomment if you want adjustable strength)
+--[[
+Tabs.VehicleMods:Slider({
+    Title = "Tornado Radius",
+    Value = { Min = 50, Max = 300, Default = 120 },
+    Callback = function(v) TornadoRadius = v end,
+})
+
+Tabs.VehicleMods:Slider({
+    Title = "Pull Strength",
+    Value = { Min = 1000, Max = 8000, Default = 4500 },
+    Callback = function(v) PullStrength = v end,
+})
+
+Tabs.VehicleMods:Slider({
+    Title = "Spin Strength",
+    Value = { Min = 1000, Max = 5000, Default = 2800 },
+    Callback = function(v) SpinStrength = v end,
+})
+--]]
+
+WindUI:Notify({
+    Title = "Success",
+    Content = "Car Tornado feature added to Vehicle Mods tab!",
+    Duration = 6
+})
