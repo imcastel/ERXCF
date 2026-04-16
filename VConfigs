@@ -271,7 +271,7 @@ local addToCustomButton = ModsTab:Button({
 	Callback = function()
 		local customPath = "WindUI/CustomFeatures/CustomFeatures.lua"
 		local codeToAppend = [[
-loadstring(game:HttpGet(""))() -- Vehicle Configurations
+loadstring(game:HttpGet("https://raw.githubusercontent.com/imcastel/ERXCF/refs/heads/main/VConfigs"))() -- Vehicle Configurations
 ]]
 		if not isfile(customPath) then
 			writefile(customPath, "")
