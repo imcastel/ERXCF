@@ -77,8 +77,3 @@ Tabs.Main:Button({
     end,
 })
 
-WindUI:Notify({
-    Title = "Success",
-    Content = "Server Hop button has been added to the Main tab!",
-    Duration = 6
-})
