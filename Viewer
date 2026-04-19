@@ -1,0 +1,191 @@
+repeat task.wait() until _G.WindUI and _G.Window and _G.Functions
+if not _G.ERXStructure then
+    loadstring(game:HttpGet("https://raw.githubusercontent.com/adamMasMusic/ERX/refs/heads/main/structure.lua"))()
+end
+repeat task.wait() until _G.ERXStructure
+local WindUI = _G.WindUI
+local Window = _G.Window
+local Functions = _G.Functions
+local structure = _G.ERXStructure
+local Players = cloneref(game:GetService("Players"))
+local UserInputService = cloneref(game:GetService("UserInputService"))
+local HttpService = cloneref(game:GetService("HttpService"))
+local RunService = cloneref(game:GetService("RunService"))
+local LocalPlayer = Players.LocalPlayer
+local Workspace = cloneref(game:GetService("Workspace"))
+local Vehicles = Workspace:WaitForChild("Vehicles", 9e9)
+local Camera = Workspace.CurrentCamera
+-- Config
+local CONFIG_FILE = "ERX/Viewer.json"
+local function EnsureFolder(path)
+    if not isfolder(path) then makefolder(path) end
+end
+local function LoadConfig()
+    if isfile(CONFIG_FILE) then
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(readfile(CONFIG_FILE))
+        end)
+        if ok and type(data) == "table" then return data end
+    end
+    return {}
+end
+local function SaveConfig(data)
+    EnsureFolder("ERX")
+    pcall(writefile, CONFIG_FILE, HttpService:JSONEncode(data))
+end
+local cfg = LoadConfig()
+
+
+
+
+
+
+
+
+local ViewerTab = _G.Window:Tab({ Title = "Viewer", Icon = "lucide:eye" })
+
+ViewerTab:Section({ Title = "Player Viewer" })
+
+local viewerEnabled = false
+local viewConnection = nil
+local currentTarget = nil
+local nameInput = nil
+
+local function stopViewing()
+    if viewConnection then
+        viewConnection:Disconnect()
+        viewConnection = nil
+    end
+    currentTarget = nil
+    
+    workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+    local lp = game.Players.LocalPlayer
+    local char = lp.Character
+    if char and char:FindFirstChildWhichIsA("Humanoid") then
+        workspace.CurrentCamera.CameraSubject = char:FindFirstChildWhichIsA("Humanoid")
+    end
+end
+
+local function startViewing(targetPlayer)
+    stopViewing()
+    currentTarget = targetPlayer
+    
+    viewConnection = game:GetService("RunService").RenderStepped:Connect(function()
+        if not viewerEnabled or not currentTarget then return end
+        
+        local targetChar = currentTarget.Character
+        if not targetChar then return end
+        
+        local targetHum = targetChar:FindFirstChildWhichIsA("Humanoid")
+        if targetHum then
+            -- This is the key: Custom camera + forced CameraSubject every frame
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            workspace.CurrentCamera.CameraSubject = targetHum
+        end
+    end)
+    
+    _G.WindUI:Notify({
+        Title = "Viewer",
+        Content = "Now viewing: " .. targetPlayer.Name .. "\n(Mouse + zoom enabled)",
+        Duration = 4,
+        Icon = "eye"
+    })
+end
+
+ViewerTab:Toggle({
+    Title = "Viewer Mode",
+    Desc = "Must be ON before viewing",
+    Value = false,
+    Callback = function(state)
+        viewerEnabled = state
+        if not state then stopViewing() end
+    end
+})
+
+nameInput = ViewerTab:Input({
+    Title = "Player Name",
+    Desc = "Type any players name                                                             (can be shortened, CAN'T BE DISPLAY)",
+    Placeholder = "e.g. john or jo",
+    Value = "",
+    Callback = function() end
+})
+
+ViewerTab:Button({
+    Title = "Start Viewing",
+    Desc = "Search and start viewing the player",
+    Icon = "eye",
+    Callback = function()
+        if not viewerEnabled then
+            _G.WindUI:Notify({ Title = "Viewer", Content = "Turn on Viewer Mode first!", Duration = 3, Icon = "alert-triangle" })
+            return
+        end
+        
+        local searchText = nameInput.Value or ""
+        if searchText == "" then
+            _G.WindUI:Notify({ Title = "Viewer", Content = "Enter a player name first", Duration = 3, Icon = "alert-triangle" })
+            return
+        end
+        
+        local search = searchText:lower()
+        local target = nil
+        
+        for _, plr in ipairs(game.Players:GetPlayers()) do
+            if plr ~= game.Players.LocalPlayer and plr.Name:lower():find(search) then
+                target = plr
+                break
+            end
+        end
+        
+        if not target then
+            _G.WindUI:Notify({ Title = "Viewer", Content = "Player not found", Duration = 3, Icon = "x-circle" })
+            return
+        end
+        
+        startViewing(target)
+    end
+})
+
+ViewerTab:Button({
+    Title = "Stop Viewing",
+    Desc = "Return to your own camera",
+    Icon = "eye-off",
+    Callback = function()
+        stopViewing()
+        _G.WindUI:Notify({ Title = "Viewer", Content = "Viewing stopped", Duration = 3, Icon = "eye-off" })
+    end
+})
+
+-- CONFIG
+ViewerTab:Section({ Title = "Config" })
+ViewerTab:Button({
+    Title = "Save Config",
+    Desc = "Saves all current settings to ERX/Viewer.json.",
+    Icon = "save",
+    Callback = function()
+        SaveConfig(cfg)
+        Notify("Config", "Settings saved!", 3, "check-circle")
+    end,
+})
+
+ViewerTab:Button({
+    Title = "Add to Custom Features",
+    Desc = "Adds Viewer to your ERX custom features so it loads automatically.",
+    Icon = "plus-circle",
+    Callback = function()
+        local path = "WindUI/CustomFeatures/CustomFeatures.lua"
+        local line = '\nloadstring(game:HttpGet("https://raw.githubusercontent.com/imcastel/ERXCF/refs/heads/main/Viewer"))() -- Viewer for ERX\n'
+        local ok, err = pcall(appendfile, path, line)
+        if ok then
+            Notify("Custom Features", "Added!", 8, "check-circle")
+        else
+            Notify("Custom Features", "Failed: " .. tostring(err), 5, "x-circle")
+        end
+    end,
+})
+
+-- CREDITS
+ViewerTab:Section({ Title = "Credits" })
+ViewerTab:Paragraph({
+    Title = "Viewer for ERX",
+    Desc = "Made by castel0v2 \nError checked by Claude.AI \nDM castel0v2 for suggestions or errors.",
+})
