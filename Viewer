@@ -1,55 +1,34 @@
-repeat task.wait() until _G.WindUI and _G.Window and _G.Functions
-if not _G.ERXStructure then
-    loadstring(game:HttpGet("https://raw.githubusercontent.com/adamMasMusic/ERX/refs/heads/main/structure.lua"))()
+repeat task.wait() until _G.WindUI and (_G.Tabs or getgenv().Tabs)
+
+local WindUI = getgenv().WindUI or _G.WindUI
+local Tabs = getgenv().Tabs or _G.Tabs
+
+-- Wait for the specific Visuals tab to be initialized by the main script
+local startTime = tick()
+while (not Tabs or not Tabs.Visuals) and tick() - startTime < 15 do
+    task.wait(0.5)
+    Tabs = getgenv().Tabs or _G.Tabs
 end
-repeat task.wait() until _G.ERXStructure
-local WindUI = _G.WindUI
-local Window = _G.Window
-local Functions = _G.Functions
-local structure = _G.ERXStructure
+
+if not Tabs or not Tabs.Visuals then
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "ERX Viewer",
+        Text = "Could not find Visuals tab. Load ERX first!",
+        Duration = 8
+    })
+    return
+end
+
+-- Services
 local Players = cloneref(game:GetService("Players"))
-local UserInputService = cloneref(game:GetService("UserInputService"))
-local HttpService = cloneref(game:GetService("HttpService"))
 local RunService = cloneref(game:GetService("RunService"))
 local LocalPlayer = Players.LocalPlayer
 local Workspace = cloneref(game:GetService("Workspace"))
-local Vehicles = Workspace:WaitForChild("Vehicles", 9e9)
-local Camera = Workspace.CurrentCamera
--- Config
-local CONFIG_FILE = "ERX/Viewer.json"
-local function EnsureFolder(path)
-    if not isfolder(path) then makefolder(path) end
-end
-local function LoadConfig()
-    if isfile(CONFIG_FILE) then
-        local ok, data = pcall(function()
-            return HttpService:JSONDecode(readfile(CONFIG_FILE))
-        end)
-        if ok and type(data) == "table" then return data end
-    end
-    return {}
-end
-local function SaveConfig(data)
-    EnsureFolder("ERX")
-    pcall(writefile, CONFIG_FILE, HttpService:JSONEncode(data))
-end
-local cfg = LoadConfig()
 
-
-
-
-
-
-
-
-local ViewerTab = _G.Window:Tab({ Title = "Viewer", Icon = "lucide:eye" })
-
-ViewerTab:Section({ Title = "Player Viewer" })
-
+-- Logic Variables
 local viewerEnabled = false
 local viewConnection = nil
 local currentTarget = nil
-local nameInput = nil
 
 local function stopViewing()
     if viewConnection then
@@ -58,11 +37,10 @@ local function stopViewing()
     end
     currentTarget = nil
     
-    workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-    local lp = game.Players.LocalPlayer
-    local char = lp.Character
+    Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+    local char = LocalPlayer.Character
     if char and char:FindFirstChildWhichIsA("Humanoid") then
-        workspace.CurrentCamera.CameraSubject = char:FindFirstChildWhichIsA("Humanoid")
+        Workspace.CurrentCamera.CameraSubject = char:FindFirstChildWhichIsA("Humanoid")
     end
 end
 
@@ -70,7 +48,7 @@ local function startViewing(targetPlayer)
     stopViewing()
     currentTarget = targetPlayer
     
-    viewConnection = game:GetService("RunService").RenderStepped:Connect(function()
+    viewConnection = RunService.RenderStepped:Connect(function()
         if not viewerEnabled or not currentTarget then return end
         
         local targetChar = currentTarget.Character
@@ -78,23 +56,27 @@ local function startViewing(targetPlayer)
         
         local targetHum = targetChar:FindFirstChildWhichIsA("Humanoid")
         if targetHum then
-            -- This is the key: Custom camera + forced CameraSubject every frame
-            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
-            workspace.CurrentCamera.CameraSubject = targetHum
+            Workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            Workspace.CurrentCamera.CameraSubject = targetHum
         end
     end)
     
-    _G.WindUI:Notify({
+    WindUI:Notify({
         Title = "Viewer",
-        Content = "Now viewing: " .. targetPlayer.Name .. "\n(Mouse + zoom enabled)",
+        Content = "Now viewing: " .. targetPlayer.Name,
         Duration = 4,
         Icon = "eye"
     })
 end
 
-ViewerTab:Toggle({
+-- Injecting into the Pre-existent Visuals Tab
+local Visuals = Tabs.Visuals
+
+Visuals:Section({ Title = "Player Viewer" })
+
+Visuals:Toggle({
     Title = "Viewer Mode",
-    Desc = "Must be ON before viewing",
+    Desc = "Must be ON to lock camera",
     Value = false,
     Callback = function(state)
         viewerEnabled = state
@@ -102,90 +84,49 @@ ViewerTab:Toggle({
     end
 })
 
-nameInput = ViewerTab:Input({
+local nameInput = Visuals:Input({
     Title = "Player Name",
-    Desc = "Type any players name                                                             (can be shortened, CAN'T BE DISPLAY)",
-    Placeholder = "e.g. john or jo",
+    Desc = "Search by username",
+    Placeholder = "Enter name...",
     Value = "",
     Callback = function() end
 })
 
-ViewerTab:Button({
+Visuals:Button({
     Title = "Start Viewing",
-    Desc = "Search and start viewing the player",
-    Icon = "eye",
+    Desc = "Search and lock camera",
+    Icon = "lucide:eye",
     Callback = function()
         if not viewerEnabled then
-            _G.WindUI:Notify({ Title = "Viewer", Content = "Turn on Viewer Mode first!", Duration = 3, Icon = "alert-triangle" })
+            WindUI:Notify({ Title = "Viewer", Content = "Turn on Viewer Mode first!", Duration = 3, Icon = "alert-triangle" })
             return
         end
         
         local searchText = nameInput.Value or ""
-        if searchText == "" then
-            _G.WindUI:Notify({ Title = "Viewer", Content = "Enter a player name first", Duration = 3, Icon = "alert-triangle" })
-            return
-        end
-        
         local search = searchText:lower()
         local target = nil
         
-        for _, plr in ipairs(game.Players:GetPlayers()) do
-            if plr ~= game.Players.LocalPlayer and plr.Name:lower():find(search) then
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Name:lower():find(search) then
                 target = plr
                 break
             end
         end
         
-        if not target then
-            _G.WindUI:Notify({ Title = "Viewer", Content = "Player not found", Duration = 3, Icon = "x-circle" })
-            return
+        if target then
+            startViewing(target)
+        else
+            WindUI:Notify({ Title = "Viewer", Content = "Player not found", Duration = 3, Icon = "x-circle" })
         end
-        
-        startViewing(target)
     end
 })
 
-ViewerTab:Button({
+Visuals:Button({
     Title = "Stop Viewing",
-    Desc = "Return to your own camera",
-    Icon = "eye-off",
+    Desc = "Return camera to self",
+    Icon = "lucide:eye-off",
     Callback = function()
         stopViewing()
-        _G.WindUI:Notify({ Title = "Viewer", Content = "Viewing stopped", Duration = 3, Icon = "eye-off" })
+        WindUI:Notify({ Title = "Viewer", Content = "Returned to character", Duration = 3, Icon = "eye-off" })
     end
-})
-
--- CONFIG
-ViewerTab:Section({ Title = "Config" })
-ViewerTab:Button({
-    Title = "Save Config",
-    Desc = "Saves all current settings to ERX/Viewer.json.",
-    Icon = "save",
-    Callback = function()
-        SaveConfig(cfg)
-        Notify("Config", "Settings saved!", 3, "check-circle")
-    end,
-})
-
-ViewerTab:Button({
-    Title = "Add to Custom Features",
-    Desc = "Adds Viewer to your ERX custom features so it loads automatically.",
-    Icon = "plus-circle",
-    Callback = function()
-        local path = "WindUI/CustomFeatures/CustomFeatures.lua"
-        local line = '\nloadstring(game:HttpGet("https://raw.githubusercontent.com/imcastel/ERXCF/refs/heads/main/Viewer"))() -- Viewer for ERX\n'
-        local ok, err = pcall(appendfile, path, line)
-        if ok then
-            Notify("Custom Features", "Added!", 8, "check-circle")
-        else
-            Notify("Custom Features", "Failed: " .. tostring(err), 5, "x-circle")
-        end
-    end,
-})
-
--- CREDITS
-ViewerTab:Section({ Title = "Credits" })
-ViewerTab:Paragraph({
-    Title = "Viewer for ERX",
-    Desc = "Made by castel0v2 \nError checked by Claude.AI \nDM castel0v2 for suggestions or errors.",
 })
