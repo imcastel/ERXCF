@@ -1,3 +1,8 @@
+if _G.ERXVehicleConfigurations then
+	warn("Vehicle Configurations already loaded or is loading!")
+	return
+end
+
 _G.ERXVehicleConfigurations = true
 
 repeat task.wait() until _G.WindUI and _G.Window and _G.Functions
@@ -56,27 +61,16 @@ local function TryRestartVehicleUI()
 	end
 end
 
-local function Notify(title, content, duration)
-	WindUI:Notify({
-		Title = "Vehicle Configurations - " .. title,
-		Content = content,
-		Duration = duration or 4,
-	})
-end
-
---maintab
 local ModsTab = Window:Tab({
 	Title = "Vehicle Configurations",
 	Icon = "car",
 	Locked = false,
 })
 
----carmods
 local CarModsSection = ModsTab:Section({
-	Title = "Car Mods",
+	Title = "Car Mods (NOT FE)",
 })
 
--- Car Rainbow
 local rainbowConnection = nil
 local originalColors = {}
 
@@ -93,7 +87,6 @@ local rainbowToggle = ModsTab:Toggle({
 		if state then
 			local vehicle = GetVehicle()
 			if not vehicle then
-				Notify("Rainbow", "Enter a vehicle first!", 3)
 				return
 			end
 			
@@ -116,42 +109,75 @@ local rainbowToggle = ModsTab:Toggle({
 					end
 				end
 			end)
+		else
+			local vehicle = GetVehicle()
+			if vehicle then
+				for part, originalColor in pairs(originalColors) do
+					if part and part.Parent and originalColor then
+						part.Color = originalColor
+					end
+				end
+			end
+			originalColors = {}
+			TryRestartVehicleUI()
 		end
 	end,
 })
 VCConfig:Register("rainbowToggle", rainbowToggle)
 
--- Reset Car Color
-local resetColorButton = ModsTab:Button({
-	Title = "Reset Car Color",
-	Desc = "Restores the vehicle to its exact original colors",
-	Locked = false,
-	Callback = function()
-		if rainbowConnection then
-			rainbowConnection:Disconnect()
-			rainbowConnection = nil
+VCConfig:Register("noBrakesToggle", noBrakesToggle)
+
+local serverRainbowConnection = nil
+local serverOriginalColors = {}
+
+local serverRainbowToggle = ModsTab:Toggle({
+	Title = "Rainbow All Cars (Client-Side)",
+	Desc = "Makes every car on the server rainbow - only you can see it",
+	Value = false,
+	Callback = function(state)
+		if serverRainbowConnection then
+			serverRainbowConnection:Disconnect()
+			serverRainbowConnection = nil
 		end
 		
-		local vehicle = GetVehicle()
-		if not vehicle then
-			Notify("Reset Color", "Enter a vehicle first!", 3)
-			return
-		end
-		
-		for part, originalColor in pairs(originalColors) do
-			if part and part.Parent and originalColor then
-				part.Color = originalColor
+		if state then
+			serverRainbowConnection = RunService.Heartbeat:Connect(function()
+				for _, vehicle in ipairs(VehiclesFolder:GetChildren()) do
+					if vehicle:IsA("Model") then
+						if not serverOriginalColors[vehicle] then
+							serverOriginalColors[vehicle] = {}
+							for _, part in ipairs(vehicle:GetDescendants()) do
+								if part:IsA("BasePart") and part.Name ~= "CollisionPart" then
+									serverOriginalColors[vehicle][part] = part.Color
+								end
+							end
+						end
+						
+						local hue = (tick() * 2) % 1
+						local color = Color3.fromHSV(hue, 1, 1)
+						for part, _ in pairs(serverOriginalColors[vehicle]) do
+							if part and part.Parent then
+								part.Color = color
+							end
+						end
+					end
+				end
+			end)
+		else
+			for vehicle, colorTable in pairs(serverOriginalColors) do
+				if vehicle and vehicle.Parent then
+					for part, originalColor in pairs(colorTable) do
+						if part and part.Parent then
+							part.Color = originalColor
+						end
+					end
+				end
 			end
+			serverOriginalColors = {}
 		end
-		
-		originalColors = {}
-		
-		TryRestartVehicleUI()
-		Notify("Reset Color", "Vehicle restored to original colors", 4)
 	end,
 })
 
--- No Brakes
 local noBrakesToggle = ModsTab:Toggle({
 	Title = "No Brakes",
 	Desc = "Completely disables braking on your current vehicle",
@@ -159,7 +185,6 @@ local noBrakesToggle = ModsTab:Toggle({
 	Callback = function(state)
 		local vehicle = GetVehicle()
 		if not vehicle then
-			Notify("No Brakes", "Enter a vehicle first!", 3)
 			return
 		end
 		local success, Drive = GetDrive(vehicle)
@@ -186,23 +211,16 @@ local noBrakesToggle = ModsTab:Toggle({
 		end
 		
 		TryRestartVehicleUI()
-		Notify("No Brakes", state and "Brakes disabled - good luck stopping!" or "Brakes restored", 4)
 	end,
 })
-VCConfig:Register("noBrakesToggle", noBrakesToggle)
 
----misc
-local MiscSection = ModsTab:Section({
-	Title = "Misc",
-})
+VCConfig:Register("serverRainbowToggle", serverRainbowToggle)
 
--- Server Hop
 local serverHopButton = ModsTab:Button({
 	Title = "Server Hop",
 	Desc = "Instantly teleports you to a new server",
 	Locked = false,
 	Callback = function()
-		Notify("Server Hop", "Hopping to a new server...", 3)
 		task.wait(1)
 		pcall(function()
 			TeleportService:Teleport(game.PlaceId)
@@ -210,7 +228,6 @@ local serverHopButton = ModsTab:Button({
 	end,
 })
 
---config
 local ConfigSection = ModsTab:Section({
 	Title = "Config",
 })
@@ -221,7 +238,6 @@ local saveConfigButton = ModsTab:Button({
 	Locked = false,
 	Callback = function()
 		VCConfig:Save()
-		Notify("Config", "All settings saved successfully!", 3)
 	end,
 })
 
@@ -238,14 +254,15 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/imcastel/ERXCF/refs/h
 			writefile(customPath, "")
 		end
 		appendfile(customPath, "\n" .. codeToAppend)
-		Notify("Loader", "Vehicle Configurations added to auto-load!", 5)
 	end,
 })
--- creds
+
 ModsTab:Section({ Title = "Credits" })
 ModsTab:Paragraph({
-    Title = "VehicleConfigurations for ERX",
-    Desc = "made by castel and ai",
+    Title = "Vehicle Configurations for ERX",
+    Desc = "Made by castel0v2. \nRevised and error checked by Grok",
 })
 
 VCConfig:Load()
+
+WindUI:Notify({ Title = "Vehicle Configurations Loaded Successfully", Content = "made by castel0v2", Duration = 6, })
