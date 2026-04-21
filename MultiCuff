@@ -360,7 +360,7 @@ MCTab:Keybind({
 })
 
 MCTab:Keybind({
-    Title    = " Arrest All Keybind",
+    Title    = "Arrest All Keybind",
     Desc     = "Press to arrest all attached players",
     Value    = "K",
     Callback = function(key) cfg.arrestKeybind = Enum.KeyCode[key] end,
