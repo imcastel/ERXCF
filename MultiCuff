@@ -1,0 +1,417 @@
+
+
+if _G.ERXMultiCuff then
+    warn("MultiCuff  already loaded!")
+    return
+end
+_G.ERXMultiCuff = true
+
+
+repeat task.wait() until _G.WindUI and _G.Window and _G.Tabs
+
+local WindUI     = _G.WindUI
+local Window     = _G.Window
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS        = game:GetService("UserInputService")
+local RS         = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local function getChar()  return LocalPlayer.Character end
+local function getHRP()   local c = getChar() return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHuman() local c = getChar() return c and c:FindFirstChildWhichIsA("Humanoid") end
+
+
+local FE           = RS:WaitForChild("FE", 30)
+local UseHandcuffs = FE and FE:WaitForChild("UseHandcuffs", 30)
+local EquippedHC   = FE and FE:WaitForChild("EquippedHandcuffs", 30)
+
+if not UseHandcuffs then
+    warn("[MultiCuff] Could not find UseHandcuffs remote. Are you in ERLC?")
+    return
+end
+
+
+local cfg = {
+    keybindEnabled = true,
+    keybind        = Enum.KeyCode.H,
+    arrestKeybind  = Enum.KeyCode.K,
+    auraRange      = 35,
+    retryDelay     = 0.15,
+    maxAttempts    = 8,
+    autoCuffLoop   = false,
+    wantedOnly     = false,
+    autoEject      = false,
+}
+
+-- Track who we currently have welded so we can release them
+local cuffedPlayers    = {}
+local autoCuffConn     = nil
+local activeCuffThread = nil
+
+
+local Settings = RS:FindFirstChild("PrivateServers")
+
+local function isPoliceTeam(p)
+    local t = p.Team
+    return t and (t.Name == "Police" or t.Name == "Sheriff")
+end
+
+local function isWanted(p)
+    if not p or not p.Team then return false end
+    if p.Team.Name == "Jail" then return false end
+    if p:FindFirstChild("Is_Wanted") then return true end
+    if Settings and Settings:FindFirstChild("ArrestCivs") and Settings.ArrestCivs.Value then
+        return p.Team.Name == "Civilian"
+    end
+    return false
+end
+
+local function isDead(p)
+    local char = p.Character
+    local hum  = char and char:FindFirstChildWhichIsA("Humanoid")
+    return not hum or hum.Health <= 0
+end
+
+local function isInVehicle(p)
+    local char = p.Character
+    local hum  = char and char:FindFirstChildWhichIsA("Humanoid")
+    return hum and hum.SeatPart ~= nil
+end
+
+local function distanceTo(p)
+    local myHRP = getHRP()
+    local tHRP  = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+    if not myHRP or not tHRP then return math.huge end
+    return (myHRP.Position - tHRP.Position).Magnitude
+end
+
+local function isValidTarget(p)
+    if p == LocalPlayer then return false end
+    if isPoliceTeam(p) then return false end
+    if cuffedPlayers[p] then return false end
+    if isDead(p) then return false end
+
+    local char = p.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return false end
+
+    if cfg.wantedOnly and not isWanted(p) then return false end
+
+    return true
+end
+
+local function getHandcuffs()
+    local bp   = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local char = getChar()
+    return (bp and bp:FindFirstChild("Handcuffs"))
+        or (char and char:FindFirstChild("Handcuffs"))
+end
+
+local function ensureHandcuffsEquipped()
+    local hc  = getHandcuffs()
+    local hum = getHuman()
+    if not hc or not hum then return false end
+    if not getChar():FindFirstChild("Handcuffs") then
+        hum:EquipTool(hc)
+        task.wait(0.12)
+        pcall(function() EquippedHC:FireServer(true) end)
+    end
+    return true
+end
+
+
+local function weldPlayer(target)
+    if not isValidTarget(target) then return false, "Invalid target" end
+    if not ensureHandcuffsEquipped() then return false, "No handcuffs" end
+
+    local char = getChar()
+    if not char then return false, "No character" end
+
+    -- Auto-eject target from their vehicle before cuffing
+    if cfg.autoEject and isInVehicle(target) then
+        local tChar = target.Character
+        local tHum  = tChar and tChar:FindFirstChildWhichIsA("Humanoid")
+        if tHum and tHum.SeatPart then
+            -- Force unseat by setting PlatformStand then jumping state
+            pcall(function()
+                tHum.Sit = false
+                tHum:ChangeState(Enum.HumanoidStateType.Jumping)
+            end)
+            task.wait(0.15)
+        end
+    end
+
+    -- Client-side teleport next to them so the server distance check passes
+    local tHRP = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if tHRP then
+        char:PivotTo(CFrame.new(tHRP.Position + Vector3.new(2, 0, 0)))
+        task.wait(0.05)
+    end
+
+    for i = 1, cfg.maxAttempts do
+        ensureHandcuffsEquipped()
+
+        -- Re-check dead between attempts
+        if isDead(target) then return false, "Target died" end
+
+        local ok, result = pcall(function()
+            return UseHandcuffs:InvokeServer("Handcuff", target)
+        end)
+
+        if ok and result == "Success" then
+            cuffedPlayers[target] = true
+            WindUI:Notify({
+                Title   = "MultiCuff",
+                Content = "⛓ Attached " .. target.Name,
+                Duration = 3,
+            })
+            return true, "Success"
+        end
+
+        task.wait(cfg.retryDelay)
+    end
+
+    return false, "Max attempts reached"
+end
+
+
+local function arrestAll()
+    local count = 0
+    for target in pairs(cuffedPlayers) do
+        pcall(function()
+            UseHandcuffs:InvokeServer("Arrest", target)
+        end)
+        cuffedPlayers[target] = nil
+        count += 1
+    end
+
+    WindUI:Notify({
+        Title   = "MultiCuff",
+        Content = count > 0 and "Arrested " .. count .. " player(s)." or "Nobody attached.",
+        Duration = 3,
+    })
+end
+
+
+local function weldAllNearby()
+    if activeCuffThread then
+        task.cancel(activeCuffThread)
+        activeCuffThread = nil
+    end
+
+    activeCuffThread = task.spawn(function()
+        local targets = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if isValidTarget(p) and distanceTo(p) <= cfg.auraRange then
+                table.insert(targets, p)
+            end
+        end
+
+        if #targets == 0 then
+            WindUI:Notify({ Title = "MultiCuff", Content = "No valid targets nearby.", Duration = 3 })
+            return
+        end
+
+        WindUI:Notify({
+            Title   = "MultiCuff",
+            Content = "Attaching " .. #targets .. " player(s)...",
+            Duration = 3,
+        })
+
+        local threads = {}
+        for _, target in ipairs(targets) do
+            threads[#threads + 1] = task.spawn(function()
+                local ok, msg = weldPlayer(target)
+                if not ok then warn("[MultiCuff] Failed: " .. target.Name .. " — " .. msg) end
+            end)
+        end
+
+        for _, t in ipairs(threads) do
+            repeat task.wait() until coroutine.status(t) == "dead"
+        end
+
+        activeCuffThread = nil
+    end)
+end
+
+local function startAutoWeld()
+    if autoCuffConn then return end
+    autoCuffConn = RunService.Heartbeat:Connect(function()
+        if not cfg.autoCuffLoop then return end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if isValidTarget(p) and distanceTo(p) <= cfg.auraRange then
+                task.spawn(weldPlayer, p)
+            end
+        end
+    end)
+end
+
+local function stopAutoWeld()
+    if autoCuffConn then autoCuffConn:Disconnect() autoCuffConn = nil end
+end
+
+-- Clean up tracking when a cuffed player leaves or dies
+Players.PlayerRemoving:Connect(function(p) cuffedPlayers[p] = nil end)
+
+for _, p in ipairs(Players:GetPlayers()) do
+    p.CharacterRemoving:Connect(function() cuffedPlayers[p] = nil end)
+end
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterRemoving:Connect(function() cuffedPlayers[p] = nil end)
+end)
+
+
+local ConfigManager = Window.ConfigManager
+local MCConfig = ConfigManager and ConfigManager:CreateConfig("MultiCuff")
+
+local MCTab = Window:Tab({ Title = "MultiCuff+", Icon = "link" })
+
+MCTab:Section({ Title = "Multi-Cuff" })
+
+MCTab:Toggle({
+    Title    = "🦹 Wanted Only",
+    Desc     = "Only attach players who have a wanted/arrest tag",
+    Value    = false,
+    Callback = function(state) cfg.wantedOnly = state end,
+})
+
+MCTab:Toggle({
+    Title    = "🚗 Auto Eject from Car",
+    Desc     = "Forces targets out of their vehicle before cuffing",
+    Value    = false,
+    Callback = function(state) cfg.autoEject = state end,
+})
+
+MCTab:Input({
+    Title       = "📶 Aura Range (studs)",
+    Desc        = "How close players must be. Default: 35",
+    Placeholder = "35",
+    Callback    = function(val)
+        local n = tonumber(val)
+        if n and n > 0 then
+            cfg.auraRange = n
+            WindUI:Notify({ Title = "MultiCuff ", Content = "Range set to " .. n .. " studs", Duration = 2 })
+        end
+    end,
+})
+
+MCTab:Input({
+    Title       = "🔄 Retry Delay (ms)",
+    Desc        = "Delay between retry attempts per player. Default: 150",
+    Placeholder = "150",
+    Callback    = function(val)
+        local n = tonumber(val)
+        if n and n >= 0 then
+            cfg.retryDelay = n / 1000
+            WindUI:Notify({ Title = "MultiCuff", Content = "Retry delay set to " .. n .. "ms", Duration = 2 })
+        end
+    end,
+})
+
+MCTab:Button({
+    Title    = "⛓ Attach All Nearby",
+    Desc     = "Weld all nearby players to you",
+    Callback = function()
+        if not isPoliceTeam(LocalPlayer) then
+            WindUI:Notify({ Title = "MultiCuff", Content = "Must be on Police / Sheriff team!", Duration = 4 })
+            return
+        end
+        weldAllNearby()
+    end,
+})
+
+MCTab:Button({
+    Title    = "🚔 Arrest All",
+    Desc     = "Arrest all currently attached players",
+    Callback = arrestAll,
+})
+
+MCTab:Section({ Title = "Auto-Weld Aura" })
+
+MCTab:Toggle({
+    Title    = "🔗 Auto-Weld Aura",
+    Desc     = "Automatically attaches anyone who walks into range",
+    Value    = false,
+    Callback = function(state)
+        cfg.autoCuffLoop = state
+        if state then startAutoWeld() else stopAutoWeld() end
+        WindUI:Notify({
+            Title   = "MultiCuff",
+            Content = state and "Auto-Weld ON" or "Auto-Weld OFF",
+            Duration = 2,
+        })
+    end,
+})
+
+MCTab:Section({ Title = "Keybinds" })
+
+MCTab:Toggle({
+    Title    = "⌨️ Enable Keybinds",
+    Desc     = "Toggle all keybinds on/off",
+    Value    = true,
+    Callback = function(state) cfg.keybindEnabled = state end,
+})
+
+MCTab:Keybind({
+    Title    = "Attach All Keybind",
+    Desc     = "Press to attach all nearby players",
+    Value    = "H",
+    Callback = function(key) cfg.keybind = Enum.KeyCode[key] end,
+})
+
+MCTab:Keybind({
+    Title    = " Arrest All Keybind",
+    Desc     = "Press to arrest all attached players",
+    Value    = "K",
+    Callback = function(key) cfg.arrestKeybind = Enum.KeyCode[key] end,
+})
+
+MCTab:Section({ Title = "Config" })
+
+MCTab:Button({
+    Title    = "💾 Save Config",
+    Desc     = "Save your current settings",
+    Callback = function()
+        if MCConfig then
+            MCConfig:Save()
+            WindUI:Notify({ Title = "MultiCuff", Content = "Config saved!", Duration = 3 })
+        else
+            WindUI:Notify({ Title = "MultiCuff", Content = "Config manager unavailable.", Duration = 3 })
+        end
+    end,
+})
+MCTab:Button({
+    Title    = "📌 Add to Custom Features",
+    Desc     = "Loads MultiCuff every time ERX starts",
+    Callback = function()
+        local path = "WindUI/CustomFeatures/CustomFeatures.lua"
+        local line = '\nloadstring(game:HttpGet("https://raw.githubusercontent.com/imcastel/ERXCF/refs/heads/main/MultiCuff"))() --MultiCuff\n'
+        pcall(appendfile, path, line)
+        WindUI:Notify({
+            Title   = "MultiCuff",
+            Content = "Added to custom features!",
+            Duration = 8,
+        })
+    end,
+})
+
+UIS.InputBegan:Connect(function(input, processed)
+    if processed or not cfg.keybindEnabled then return end
+    if input.KeyCode == cfg.keybind then
+        if not isPoliceTeam(LocalPlayer) then
+            WindUI:Notify({ Title = "MultiCuff", Content = "Must be on Police / Sheriff!", Duration = 3 })
+            return
+        end
+        weldAllNearby()
+    elseif input.KeyCode == cfg.arrestKeybind then
+        arrestAll()
+    end
+end)
+
+MCTab:Section({ Title = "Credits" })
+MCTab:Paragraph({
+    Title = "MultiCuff for ERX",
+    Desc = "Made by castel0v2 \nError checked by AI",
+})
+
+if MCConfig then MCConfig:Load() end
