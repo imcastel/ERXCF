@@ -414,7 +414,7 @@ MCTab:Button({ Title = "📌 Add to Custom Features", Callback = function()
 end })
 
 MCTab:Section({ Title = "Credits" })
-MCTab:Paragraph({ Title = "<b>MultiCuff for ERX</b>", Desc = "<i>Made by castel0v2</i>\nError checked by AI\n\n<b>Credits to Dorblx for help</b>"})
+MCTab:Paragraph({ Title = "<b>MultiCuff for ERX</b>", Desc = "Made by castel0v2\nError checked by AI\n\n<b>Credits to Dorblx for help</b>"})
 
 UIS.InputBegan:Connect(function(input, processed)
     if processed or not cfg.autoCuffLoop then return end
