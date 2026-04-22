@@ -1,12 +1,12 @@
+-- =============================================
+-- ERX SERVER HOP - ONLY SERVERS WITH >15 PLAYERS
+-- Execute AFTER loading ERX with Potassium
+-- =============================================
+
 repeat task.wait() until _G.WindUI and _G.Tabs
 
 local WindUI = getgenv().WindUI or _G.WindUI
 local Tabs = getgenv().Tabs or _G.Tabs
-
-if not WindUI or not Tabs or not Tabs.Main then
-    WindUI = getgenv().WindUI
-    Tabs = getgenv().Tabs
-end
 
 -- Wait for ERX UI to fully load
 local startTime = tick()
@@ -24,7 +24,7 @@ if not Tabs or not Tabs.Main then
     return
 end
 
--- Server Hop Function
+-- Updated Server Hop Function - Only servers with more than 15 players
 local function ServerHop()
     local TeleportService = game:GetService("TeleportService")
     local HttpService = game:GetService("HttpService")
@@ -32,8 +32,8 @@ local function ServerHop()
     
     WindUI:Notify({
         Title = "Server Hop",
-        Content = "Searching for a new server...",
-        Duration = 3
+        Content = "Searching for servers with 16+ players...",
+        Duration = 4
     })
     
     pcall(function()
@@ -41,7 +41,7 @@ local function ServerHop()
         local validServers = {}
         
         for _, v in ipairs(servers.data) do
-            if v.playing < v.maxPlayers and v.id ~= game.JobId then
+            if v.playing > 15 and v.playing < v.maxPlayers and v.id ~= game.JobId then
                 table.insert(validServers, v)
             end
         end
@@ -50,30 +50,35 @@ local function ServerHop()
             local target = validServers[math.random(1, #validServers)]
             WindUI:Notify({
                 Title = "Server Hop",
-                Content = "Hopping... (" .. target.playing .. "/" .. target.maxPlayers .. " players)",
-                Duration = 4
+                Content = "Hopping to server with " .. target.playing .. " players...",
+                Duration = 5
             })
             TeleportService:TeleportToPlaceInstance(PlaceId, target.id)
         else
             WindUI:Notify({
                 Title = "Server Hop",
-                Content = "No empty servers found. Retrying in 5s...",
-                Duration = 5
+                Content = "No servers with 16+ players found.\nRetrying in 6 seconds...",
+                Duration = 6
             })
-            task.wait(5)
-            ServerHop()
+            task.wait(6)
+            ServerHop()  -- Retry
         end
     end)
 end
 
--- Add to Main Tab (at the bottom)
+-- Add button to Main Tab
 Tabs.Main:Section({ Title = "Server Utilities" })
 
 Tabs.Main:Button({
-    Title = "Server Hop",
-    Desc = "Instantly hops to a different public server",
+    Title = "Server Hop (>15 Players)",
+    Desc = "Hops only to servers that have more than 15 players",
     Callback = function()
         ServerHop()
     end,
 })
 
+WindUI:Notify({
+    Title = "Server Hop Updated",
+    Content = "Server Hop button added to Main tab!\nNow only hops to servers with 16+ players.",
+    Duration = 6
+})
