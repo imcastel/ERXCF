@@ -19,44 +19,43 @@ if not Tabs or not Tabs.Main then
     return
 end
 
--- Updated Server Hop Function - Only servers with more than 15 players
+-- Server Hop Function (Strict >15 players)
 local function ServerHop()
     local TeleportService = game:GetService("TeleportService")
     local HttpService = game:GetService("HttpService")
     local PlaceId = game.PlaceId
     
-    WindUI:Notify({
-        Title = "Server Hop",
-        Content = "Searching for servers with 16+ players...",
-        Duration = 4
-    })
     
     pcall(function()
         local servers = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
         local validServers = {}
         
         for _, v in ipairs(servers.data) do
-            if v.playing > 15 and v.playing < v.maxPlayers and v.id ~= game.JobId then
+            if v.playing and v.maxPlayers and v.playing > 15 and v.playing < v.maxPlayers and v.id ~= game.JobId then
                 table.insert(validServers, v)
             end
         end
         
         if #validServers > 0 then
-            local target = validServers[math.random(1, #validServers)]
+            table.sort(validServers, function(a, b)
+                return a.playing > b.playing
+            end)
+            
+            local target = validServers[math.random(1, math.min(5, #validServers))]
             WindUI:Notify({
                 Title = "Server Hop",
-                Content = "Hopping to server with " .. target.playing .. " players...",
-                Duration = 5
+                Content = "Hopping... (" .. target.playing .. "/" .. target.maxPlayers .. " players)",
+                Duration = 4
             })
             TeleportService:TeleportToPlaceInstance(PlaceId, target.id)
         else
             WindUI:Notify({
                 Title = "Server Hop",
-                Content = "No servers with 16+ players found.\nRetrying in 6 seconds...",
-                Duration = 6
+                Content = "No servers with 16+ players found. Retrying in 8s...",
+                Duration = 5
             })
-            task.wait(6)
-            ServerHop()  -- Retry
+            task.wait(8)
+            ServerHop()
         end
     end)
 end
@@ -65,15 +64,8 @@ end
 Tabs.Main:Section({ Title = "Server Utilities" })
 
 Tabs.Main:Button({
-    Title = "Server Hop (>15 Players)",
-    Desc = "Hops only to servers that have more than 15 players",
+    Title = "Server Hop",
     Callback = function()
         ServerHop()
     end,
-})
-
-WindUI:Notify({
-    Title = "Server Hop Updated",
-    Content = "Server Hop button added to Main tab!\nNow only hops to servers with 16+ players.",
-    Duration = 6
 })
