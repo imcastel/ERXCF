@@ -1,8 +1,3 @@
--- =============================================
--- ERX SERVER HOP - ONLY SERVERS WITH >15 PLAYERS
--- Execute AFTER loading ERX with Potassium
--- =============================================
-
 repeat task.wait() until _G.WindUI and _G.Tabs
 
 local WindUI = getgenv().WindUI or _G.WindUI
