@@ -1,5 +1,3 @@
-
-
 _G.ERXMultiCuff = true
 
 repeat task.wait() until _G.WindUI and _G.Window and _G.Tabs
@@ -361,7 +359,7 @@ local MCTab = Window:Tab({ Title = "MultiCuff", Icon = "link" })
 MCTab:Section({ Title = "Multi-Cuff" })
 MCTab:Toggle({
     Title = "🔒 Multi-Cuff Enabled",
-    Desc = "Master toggle",
+
     Value = cfg.autoCuffLoop,
     Callback = function(state)
         cfg.autoCuffLoop = state
@@ -378,7 +376,7 @@ MCTab:Toggle({
 
 MCTab:Toggle({
     Title = "🌐 Auto Server Hop",
-    Desc = "Hop only to servers with 10+ players",
+    Desc = "When there is 0 wanted players, it automatically server hops. (buggy and will have issues)",
     Value = cfg.autoServerHop,
     Callback = function(state) cfg.autoServerHop = state end,
 })
@@ -400,7 +398,6 @@ MCTab:Keybind({ Title = "Arrest All", Value = "K", Callback = function(key) cfg.
 MCTab:Section({ Title = "Actions" })
 MCTab:Button({
     Title = "⛓ Attach All Nearby",
-    Desc = "Weld all nearby wanted players to you",
     Callback = function()
         if not isPoliceTeam(LocalPlayer) then notify("Must be on Police / Sheriff team!") return end
         weldAllNearby()
