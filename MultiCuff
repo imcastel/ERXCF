@@ -34,7 +34,7 @@ end
 local cfg = {
     keybind            = Enum.KeyCode.H,
     arrestKeybind      = Enum.KeyCode.K,
-    panicKeybind       = Enum.KeyCode.F8,  -- F8: not used by ERLC
+    panicKeybind       = Enum.KeyCode.F8,
     auraRange          = 35,
     retryDelay         = 0.08,
     maxAttempts        = 8,
@@ -43,9 +43,7 @@ local cfg = {
     autoServerHop      = false,
     minServerPlayers   = 10,
     autoDisableOnDeath = true,
-    ignoreEnabled      = false,
     auraVisualizer     = false,
-    playerHighlight    = false,
     webhookEnabled     = false,
     webhookURL         = "",
 }
@@ -53,28 +51,20 @@ local cfg = {
 -- ───────────────────────────────────────────────────
 -- State
 -- ───────────────────────────────────────────────────
-local cuffedPlayers    = {}
-local autoCuffConn     = nil
-local activeCuffThread = nil
-local notifyPending    = false
-local lastHopCheck     = 0
-local hopInProgress    = false
-local countdownActive  = false
-local panicActive      = false
-local Settings         = RS:FindFirstChild("PrivateServers")
+local cuffedPlayers   = {}
+local autoCuffConn    = nil
+local activeCuffThread= nil
+local notifyPending   = false
+local lastHopCheck    = 0
+local hopInProgress   = false
+local countdownActive = false
+local panicActive     = false
+local Settings        = RS:FindFirstChild("PrivateServers")
+local auraCircle      = nil
+local auraConn        = nil
 
--- Blacklist: username (lowercase) -> true
-local ignoredPlayers   = {}
-
--- Highlight tracking: Player -> Highlight instance
-local highlights       = {}
-
--- Aura visualizer part
-local auraCircle       = nil
-local auraConn         = nil
-
--- Auto-refresh handcuffs connection
-local refreshConn      = nil
+-- Team-watch: auto disable when not on police
+local teamWatchConn   = nil
 
 -- ───────────────────────────────────────────────────
 -- Helpers
@@ -98,22 +88,38 @@ local function isWanted(p)
     return false
 end
 
+-- Returns how many wanted stars a player has (ERLC stores this as "Bounty_Level")
+local function getWantedLevel(p)
+    local tag = p:FindFirstChild("Bounty_Level")
+    if tag then return math.clamp(math.floor(tonumber(tag.Value) or 0), 0, 5) end
+    if p:FindFirstChild("Is_Wanted") then return 1 end
+    return 0
+end
+
+local function starsString(level)
+    if level <= 0 then return "No stars" end
+    return string.rep("⭐", level)
+end
+
+-- Comprehensive dead check
 local function isDead(p)
     local char = p.Character
     if not char then return true end
     local hum = char:FindFirstChildWhichIsA("Humanoid")
-    if not hum or hum.Health <= 0 then return true end
+    if not hum then return true end
+    if hum.Health <= 0 then return true end
     if hum:GetState() == Enum.HumanoidStateType.Dead then return true end
+    -- Ragdoll / incapacitated value on character
     if char:FindFirstChild("Ragdoll") then return true end
+    -- Dead if HRP is missing or anchored (ERLC sometimes anchors dead chars)
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return true end
+    if hrp.Anchored and hum.Health <= 0 then return true end
     return false
 end
 
 local function isAlreadyCuffed(p)
     return p:FindFirstChild("In_Handcuffs") ~= nil
-end
-
-local function isIgnored(p)
-    return cfg.ignoreEnabled and ignoredPlayers[p.Name:lower()] == true
 end
 
 local function distanceTo(p)
@@ -129,7 +135,6 @@ local function isValidTarget(p)
     if cuffedPlayers[p] then return false end
     if isDead(p) then return false end
     if isAlreadyCuffed(p) then return false end
-    if isIgnored(p) then return false end
     if not isWanted(p) then return false end
     local char = p.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return false end
@@ -167,20 +172,45 @@ local function unequipHandcuffs()
 end
 
 -- ───────────────────────────────────────────────────
--- Discord Webhook
+-- Discord Webhook — arrests and panic only
+-- Saved as single URL, visually rich embeds
 -- ───────────────────────────────────────────────────
-local function sendWebhook(event, targetName)
+local function sendWebhook(event, targetName, wantedLevel)
     if not cfg.webhookEnabled or cfg.webhookURL == "" then return end
     task.spawn(function()
         pcall(function()
+            local isPanic  = event == "Panic"
+            local isArrest = event == "Arrest"
+
+            -- Color: arrest = gold, panic = red
+            local color = isPanic and 15158332 or 16766720
+
+            local title, desc
+            if isPanic then
+                title = "🚨  PANIC ACTIVATED"
+                desc  =
+                    ">>> 👮  **Officer**\n" .. LocalPlayer.Name .. "\n\n" ..
+                    "⏱️  **Time**\n" .. os.date("%H:%M:%S")
+            else
+                local stars = starsString(wantedLevel or 0)
+                title = "🚔  ARREST LOGGED"
+                desc  =
+                    ">>> 👮  **Officer**\n" .. LocalPlayer.Name .. "\n\n" ..
+                    "🎯  **Target**\n" .. targetName .. "\n\n" ..
+                    "⭐  **Wanted Level**\n" .. stars .. "\n\n" ..
+                    "⏱️  **Time**\n" .. os.date("%H:%M:%S")
+            end
+
             local payload = HttpService:JSONEncode({
                 embeds = {{
-                    title       = "MultiCuff — " .. event,
-                    description = "**Officer:** " .. LocalPlayer.Name .. "\n**Target:** " .. targetName .. "\n**Server:** " .. game.JobId,
-                    color       = event == "Arrest" and 15158332 or 3447003,
-                    timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                    title     = title,
+                    description = desc,
+                    color     = color,
+                    footer    = { text = "MultiCuff for ERX  •  by castel0v2" },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
                 }}
             })
+
             request({
                 Url     = cfg.webhookURL,
                 Method  = "POST",
@@ -192,26 +222,23 @@ local function sendWebhook(event, targetName)
 end
 
 -- ───────────────────────────────────────────────────
--- Aura Visualizer
+-- Aura Visualizer (#842025)
 -- ───────────────────────────────────────────────────
 local function buildAuraCircle()
     if auraCircle then auraCircle:Destroy() end
-
-    -- Draw circle as a flat transparent cylinder
+    local r    = tonumber(cfg.auraRange) or 35
     local part = Instance.new("Part")
-    part.Name        = "MultiCuffAura"
-    part.Anchored    = true
-    part.CanCollide  = false
-    part.CanTouch    = false
-    part.CastShadow  = false
-    part.Material    = Enum.Material.Neon
-    part.Color       = Color3.fromRGB(132, 32, 37)
-    part.Transparency = 0.6
-    part.Shape       = Enum.PartType.Cylinder
-    local r = tonumber(cfg.auraRange) or 35
-    part.Size        = Vector3.new(0.15, r * 2, r * 2)
-    part.Parent      = workspace
-
+    part.Name         = "MultiCuffAura"
+    part.Anchored     = true
+    part.CanCollide   = false
+    part.CanTouch     = false
+    part.CastShadow   = false
+    part.Material     = Enum.Material.Neon
+    part.Color        = Color3.fromHex("842025")
+    part.Transparency = 0.5
+    part.Shape        = Enum.PartType.Cylinder
+    part.Size         = Vector3.new(0.15, r * 2, r * 2)
+    part.Parent       = workspace
     auraCircle = part
 end
 
@@ -222,7 +249,7 @@ local function startAuraVisualizer()
         local hrp = getHRP()
         if hrp and auraCircle then
             local r = tonumber(cfg.auraRange) or 35
-            auraCircle.Size = Vector3.new(0.15, r * 2, r * 2)
+            auraCircle.Size   = Vector3.new(0.15, r * 2, r * 2)
             auraCircle.CFrame = CFrame.new(hrp.Position.X, hrp.Position.Y - 3, hrp.Position.Z)
                               * CFrame.Angles(0, 0, math.pi / 2)
         end
@@ -230,55 +257,21 @@ local function startAuraVisualizer()
 end
 
 local function stopAuraVisualizer()
-    if auraConn then auraConn:Disconnect() auraConn = nil end
-    if auraCircle then auraCircle:Destroy() auraCircle = nil end
+    if auraConn   then auraConn:Disconnect()    auraConn   = nil end
+    if auraCircle then auraCircle:Destroy()     auraCircle = nil end
 end
 
-
 -- ───────────────────────────────────────────────────
--- Auto-refresh handcuffs (built-in, always runs)
--- Watches for handcuffs being unequipped or missing
--- and quietly re-equips them so they're always ready
+-- Smart team watch — auto off when not on police
 -- ───────────────────────────────────────────────────
-local function startHandcuffRefresh()
-    if refreshConn then return end
-    refreshConn = RunService.Heartbeat:Connect(function()
-        if not cfg.autoCuffLoop then return end
-        local char = getChar()
-        if not char then return end
-        -- Only refresh if not already holding cuffs and cuffs exist in backpack
-        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-        if bp and bp:FindFirstChild("Handcuffs") and not char:FindFirstChild("Handcuffs") then
-            local hum = getHuman()
-            if hum then
-                hum:EquipTool(bp:FindFirstChild("Handcuffs"))
-            end
+local function startTeamWatch()
+    if teamWatchConn then return end
+    teamWatchConn = LocalPlayer:GetPropertyChangedSignal("Team"):Connect(function()
+        if cfg.autoCuffLoop and not isPoliceTeam(LocalPlayer) then
+            cfg.autoCuffLoop = false
+            stopAutoWeld()
+            notify("Not on Police/Sheriff — MultiCuff disabled.")
         end
-    end)
-end
-
-local function stopHandcuffRefresh()
-    if refreshConn then refreshConn:Disconnect() refreshConn = nil end
-end
-
--- ───────────────────────────────────────────────────
--- Notifications
--- ───────────────────────────────────────────────────
-local pendingcuffed = {}
-
-local function flushcuffNotification()
-    if notifyPending then return end
-    notifyPending = true
-    task.delay(0.5, function()
-        if #pendingcuffed > 0 then
-            WindUI:Notify({
-                Title   = "MultiCuff",
-                Content = "⛓ cuffed: " .. table.concat(pendingcuffed, ", "),
-                Duration = 3,
-            })
-            table.clear(pendingcuffed)
-        end
-        notifyPending = false
     end)
 end
 
@@ -288,18 +281,67 @@ end
 local function panic()
     panicActive      = true
     cfg.autoCuffLoop = false
-
     if activeCuffThread then task.cancel(activeCuffThread) activeCuffThread = nil end
-    if autoCuffConn then autoCuffConn:Disconnect() autoCuffConn = nil end
-
+    stopAutoWeld()
     unequipHandcuffs()
     table.clear(cuffedPlayers)
+    sendWebhook("Panic", "N/A", 0)
     notify("🚨 Panic! MultiCuff stopped.")
     task.delay(2, function() panicActive = false end)
 end
 
+-- forward declare stopAutoWeld so panic can call it
+-- (defined below; Lua functions must exist before call at runtime, not parse time)
+
 -- ───────────────────────────────────────────────────
--- Core weld
+-- Civilian safety check
+-- ───────────────────────────────────────────────────
+local function checkCivilianSafety()
+    local hum = getHuman()
+    if not hum then return end
+    if LocalPlayer:FindFirstChild("In_Handcuffs") then
+        for target in pairs(cuffedPlayers) do
+            if not isWanted(target) then
+                notify("⚠️ Cuffed innocent — respawning!")
+                hum:ChangeState(Enum.HumanoidStateType.Dead)
+                cuffedPlayers[target] = nil
+                return
+            end
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        checkCivilianSafety()
+    end
+end)
+
+-- ───────────────────────────────────────────────────
+-- Notifications
+-- ───────────────────────────────────────────────────
+local pendingAttached = {}
+
+local function flushAttachNotification()
+    if notifyPending then return end
+    notifyPending = true
+    task.delay(0.5, function()
+        if #pendingAttached > 0 then
+            WindUI:Notify({
+                Title   = "MultiCuff",
+                Content = "⛓ Cuffed: " .. table.concat(pendingAttached, ", "),
+                Duration = 3,
+            })
+            table.clear(pendingAttached)
+        end
+        notifyPending = false
+    end)
+end
+
+-- ───────────────────────────────────────────────────
+-- Core weld — vehicle ejection handled natively by
+-- the Handcuff invoke itself (game auto-unsits after ~1s)
 -- ───────────────────────────────────────────────────
 local function weldPlayer(target)
     if panicActive then return false, "Panic active" end
@@ -330,20 +372,30 @@ local function weldPlayer(target)
 
         local Response = UseHandcuffs:InvokeServer("Handcuff", target)
 
+        if Response == "Success" then
+            cuffedPlayers[target] = true
+            table.insert(pendingAttached, target.Name)
+            flushAttachNotification()
+
             if cfg.autoArrest then
                 task.wait(0.15)
                 pcall(function() UseHandcuffs:InvokeServer("Arrest", target) end)
+                sendWebhook("Arrest", target.Name, getWantedLevel(target))
                 cuffedPlayers[target] = nil
-                sendWebhook("Arrest", target.Name)
-                if cfg.playerHighlight then removeHighlight(target) 
-                end
-
+            end
 
             return true, "Success"
         end
 
+        -- If seated: game auto-unsits after invoke, wait for it then retry
         local tHum = target.Character and target.Character:FindFirstChildWhichIsA("Humanoid")
-        if tHum and tHum.SeatPart then task.wait(1.2) else task.wait(cfg.retryDelay) end
+        if tHum and tHum.SeatPart then
+            -- Wait until SeatPart clears (up to 1.5s) for smooth instant eject
+            local t0 = tick()
+            repeat task.wait(0.05) until not (tHum and tHum.SeatPart) or tick() - t0 > 1.5
+        else
+            task.wait(cfg.retryDelay)
+        end
     end
 
     return false, "Max attempts reached"
@@ -356,14 +408,13 @@ local function arrestAll()
     local count = 0
     for target in pairs(cuffedPlayers) do
         pcall(function() UseHandcuffs:InvokeServer("Arrest", target) end)
-        sendWebhook("Arrest", target.Name)
-        if cfg.playerHighlight then removeHighlight(target) end
+        sendWebhook("Arrest", target.Name, getWantedLevel(target))
         cuffedPlayers[target] = nil
         count += 1
     end
     WindUI:Notify({
         Title   = "MultiCuff",
-        Content = count > 0 and "Arrested " .. count .. " player(s)." or "Nobody cuffed.",
+        Content = count > 0 and "Arrested " .. count .. " player(s)." or "Nobody attached.",
         Duration = 3,
     })
 end
@@ -412,7 +463,8 @@ local function ServerHop()
     local PlaceId = game.PlaceId
     WindUI:Notify({ Title = "Server Hop", Content = "Looking for populated server...", Duration = 3 })
     pcall(function()
-        local servers = HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
+        local servers = HttpService:JSONDecode(game:HttpGet(
+            "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
         local valid = {}
         for _, v in ipairs(servers.data) do
             if v.playing >= cfg.minServerPlayers and v.id ~= game.JobId then
@@ -424,7 +476,7 @@ local function ServerHop()
             WindUI:Notify({ Title = "Server Hop", Content = "Hopping... (" .. t.playing .. " players)", Duration = 4 })
             TeleportService:TeleportToPlaceInstance(PlaceId, t.id)
         else
-            WindUI:Notify({ Title = "Server Hop", Content = "No big servers found. Retrying...", Duration = 5 })
+            WindUI:Notify({ Title = "Server Hop", Content = "No servers found. Retrying...", Duration = 5 })
             task.wait(6)
             hopInProgress = false
             ServerHop()
@@ -436,6 +488,10 @@ end
 -- ───────────────────────────────────────────────────
 -- Auto-weld aura
 -- ───────────────────────────────────────────────────
+function stopAutoWeld()   -- defined here so panic() above can reference it
+    if autoCuffConn then autoCuffConn:Disconnect() autoCuffConn = nil end
+end
+
 local function startAutoWeld()
     if autoCuffConn then return end
     autoCuffConn = RunService.Heartbeat:Connect(function()
@@ -449,16 +505,19 @@ local function startAutoWeld()
                     countdownActive = true
                     task.spawn(function()
                         for i = 3, 1, -1 do
-                            WindUI:Notify({ Title = "Server Hop", Content = "No wanted players. Hopping in " .. i .. "...", Duration = 1.2 })
+                            WindUI:Notify({ Title = "Server Hop",
+                                Content = "No wanted players. Hopping in " .. i .. "...", Duration = 1.2 })
                             task.wait(1)
                             if hasAnyWanted() then
-                                WindUI:Notify({ Title = "Server Hop", Content = "Wanted player appeared. Cancelled.", Duration = 3 })
+                                WindUI:Notify({ Title = "Server Hop",
+                                    Content = "Wanted appeared. Cancelled.", Duration = 3 })
                                 countdownActive = false
                                 return
                             end
                         end
                         if not hasAnyWanted() then ServerHop()
-                        else WindUI:Notify({ Title = "Server Hop", Content = "Wanted player appeared. Cancelled.", Duration = 3 }) end
+                        else WindUI:Notify({ Title = "Server Hop",
+                            Content = "Wanted appeared. Cancelled.", Duration = 3 }) end
                         countdownActive = false
                     end)
                 end
@@ -472,10 +531,6 @@ local function startAutoWeld()
             end
         end
     end)
-end
-
-local function stopAutoWeld()
-    if autoCuffConn then autoCuffConn:Disconnect() autoCuffConn = nil end
 end
 
 -- ───────────────────────────────────────────────────
@@ -497,10 +552,7 @@ if getChar() then task.spawn(hookDeath, getChar()) end
 LocalPlayer.CharacterAdded:Connect(function(char) task.spawn(hookDeath, char) end)
 
 -- Cleanup
-Players.PlayerRemoving:Connect(function(p)
-    cuffedPlayers[p] = nil
-    removeHighlight(p)
-end)
+Players.PlayerRemoving:Connect(function(p) cuffedPlayers[p] = nil end)
 for _, p in ipairs(Players:GetPlayers()) do
     p.CharacterRemoving:Connect(function() cuffedPlayers[p] = nil end)
 end
@@ -523,9 +575,7 @@ local function saveConfig()
         autoServerHop      = cfg.autoServerHop,
         minServerPlayers   = cfg.minServerPlayers,
         autoDisableOnDeath = cfg.autoDisableOnDeath,
-        ignoreEnabled      = cfg.ignoreEnabled,
         auraVisualizer     = cfg.auraVisualizer,
-        playerHighlight    = cfg.playerHighlight,
         webhookEnabled     = cfg.webhookEnabled,
         webhookURL         = cfg.webhookURL,
     }
@@ -545,16 +595,12 @@ local function loadConfig()
     if type(data.autoServerHop)      == "boolean" then cfg.autoServerHop      = data.autoServerHop end
     if type(data.minServerPlayers)   == "number"  then cfg.minServerPlayers   = data.minServerPlayers end
     if type(data.autoDisableOnDeath) == "boolean" then cfg.autoDisableOnDeath = data.autoDisableOnDeath end
-    if type(data.ignoreEnabled)      == "boolean" then cfg.ignoreEnabled      = data.ignoreEnabled end
     if type(data.auraVisualizer)     == "boolean" then cfg.auraVisualizer     = data.auraVisualizer end
-    if type(data.playerHighlight)    == "boolean" then cfg.playerHighlight    = data.playerHighlight end
     if type(data.webhookEnabled)     == "boolean" then cfg.webhookEnabled     = data.webhookEnabled end
     if type(data.webhookURL)         == "string"  then cfg.webhookURL         = data.webhookURL end
 end
 
 loadConfig()
-
--- Apply visualizer / highlights from loaded config
 if cfg.auraVisualizer then startAuraVisualizer() end
 
 -- ───────────────────────────────────────────────────
@@ -562,7 +608,6 @@ if cfg.auraVisualizer then startAuraVisualizer() end
 -- ───────────────────────────────────────────────────
 local MCTab = Window:Tab({ Title = "MultiCuff", Icon = "link" })
 
--- ── Core ──
 MCTab:Section({ Title = "Multi-Cuff" })
 
 MCTab:Toggle({
@@ -570,6 +615,11 @@ MCTab:Toggle({
     Value = cfg.autoCuffLoop,
     Callback = function(state)
         if panicActive then return end
+        -- Smart toggle: block enable if not on police
+        if state and not isPoliceTeam(LocalPlayer) then
+            notify("Must be on Police/Sheriff to enable!")
+            return
+        end
         cfg.autoCuffLoop = state
         if state then startAutoWeld() else stopAutoWeld() end
     end,
@@ -612,42 +662,11 @@ MCTab:Slider({
     Callback = function(val) cfg.retryDelay = val / 1000 end,
 })
 
--- ── Ignore / Blacklist ──
-MCTab:Section({ Title = "Ignore Players" })
-
-MCTab:Toggle({
-    Title = "🚫 Enable Ignore List",
-    Desc  = "Skip blacklisted players when cuffing",
-    Value = cfg.ignoreEnabled,
-    Callback = function(state) cfg.ignoreEnabled = state end,
-})
-
-MCTab:Input({
-    Title       = "Add to Ignore List",
-    Desc        = "Type exact username and press Enter",
-    Placeholder = "Username",
-    Callback    = function(name)
-        if name and name ~= "" then
-            ignoredPlayers[name:lower()] = true
-            notify("Ignored: " .. name)
-        end
-    end,
-})
-
-MCTab:Button({
-    Title = "Clear Ignore List",
-    Desc  = "Remove all ignored players",
-    Callback = function()
-        table.clear(ignoredPlayers)
-        notify("Ignore list cleared.")
-    end,
-})
-
 -- ── Visuals ──
 MCTab:Section({ Title = "Visuals" })
 
 MCTab:Toggle({
-    Title = "🔵 Aura Visualizer",
+    Title = "🔴 Aura Visualizer",
     Desc  = "Shows aura range as a circle on the floor",
     Value = cfg.auraVisualizer,
     Callback = function(state)
@@ -656,25 +675,27 @@ MCTab:Toggle({
     end,
 })
 
-
 -- ── Webhook ──
 MCTab:Section({ Title = "Discord Webhook" })
 
 MCTab:Toggle({
     Title = "📡 Enable Webhook Logging",
-    Desc  = "Sends cuff/arrest events to Discord",
+    Desc  = "Logs arrests and panic to Discord",
     Value = cfg.webhookEnabled,
     Callback = function(state) cfg.webhookEnabled = state end,
 })
 
+-- Single webhook URL input — saved to config file, persists across sessions
 MCTab:Input({
     Title       = "Webhook URL",
-    Desc        = "Paste your Discord webhook URL",
-    Placeholder = "https://discord.com/api/webhooks/...",
+    Desc        = "Saved to config. Only one URL is used.",
+    Placeholder = cfg.webhookURL ~= "" and "URL already saved" or "https://discord.com/api/webhooks/...",
     Callback    = function(url)
-        if url and url ~= "" then
+        if url and url:match("^https://discord%.com/api/webhooks/") then
             cfg.webhookURL = url
             notify("Webhook URL saved.")
+        else
+            notify("Invalid URL — must start with discord.com/api/webhooks/")
         end
     end,
 })
@@ -691,7 +712,12 @@ MCTab:Button({
                     Method  = "POST",
                     Headers = { ["Content-Type"] = "application/json" },
                     Body    = HttpService:JSONEncode({
-                        content = "✅ MultiCuff webhook test from **" .. LocalPlayer.Name .. "**"
+                        embeds = {{
+                            title       = "✅  WEBHOOK TEST",
+                            description = ">>> 👮  **Officer**\n" .. LocalPlayer.Name .. "\n\n⏱️  **Time**\n" .. os.date("%H:%M:%S"),
+                            color       = 3066993,
+                            footer      = { text = "MultiCuff for ERX  •  by castel0v2" },
+                        }}
                     }),
                 })
             end)
@@ -748,7 +774,7 @@ MCTab:Section({ Title = "Credits" })
 
 MCTab:Paragraph({
     Title = "<b>MultiCuff for ERX</b>",
-    Desc  = "Made by castel0v2\nError checked by AI\n\n<b>Credits to Dorblx for help</b>",
+    Desc  = "<i>Made by castel0v2</i>\nError checked by AI\n\n<b>Credits to Dorblx for help</b>",
 })
 
 -- ───────────────────────────────────────────────────
@@ -773,6 +799,6 @@ end)
 -- Start
 -- ───────────────────────────────────────────────────
 startAutoWeld()
-startHandcuffRefresh()
+startTeamWatch()
 
 notify("<b>MultiCuff Loaded!</b>\n\nH = Cuff | K = Arrest | F8 = Panic")
