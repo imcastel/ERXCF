@@ -1,0 +1,285 @@
+if getgenv()._erx_devicespoof then
+	warn("Device Spoof already loaded!")
+	return
+end
+getgenv()._erx_devicespoof = true
+
+repeat task.wait() until _G.WindUI and _G.Window and _G.Tabs and _G.Functions
+
+local WindUI      = _G.WindUI
+local Tabs        = _G.Tabs
+local Players     = cloneref(game:GetService("Players"))
+local LocalPlayer = Players.LocalPlayer
+
+-- Roblox Enum.Platform: Windows=0, OSX=1, IOS=2, Android=3, XBoxOne=10,
+-- PS4=11, UWP=12, None=255
+-- ERLC maps these to icons: Windows/OSX/UWP→PC, IOS/Android→Mobile,
+-- XBoxOne/PS4→Console
+local EnumPlatformMap = {
+	["PC"]      = Enum.Platform.Windows,
+	["Mobile"]  = Enum.Platform.IOS,
+	["Console"] = Enum.Platform.XBoxOne,
+}
+
+local StringValueMap = {
+	["PC"]      = "Desktop",
+	["Mobile"]  = "Phone",
+	["Console"] = "Console",
+}
+local KnownPlatformStrings = {
+	Desktop=true, Phone=true, Console=true,
+	PC=true, Mobile=true, Windows=true, IOS=true,
+	XBoxOne=true, Android=true, OSX=true,
+}
+
+local SpoofEnabled  = false
+local SpoofedDevice = "PC"
+local KeepThread    = nil
+local OriginalGetPlatform = nil
+
+local UIS = cloneref(game:GetService("UserInputService"))
+
+local function HookGetPlatform(enable)
+	if enable then
+		local ok, realFn = pcall(function()
+			return clonefunction(UIS.GetPlatform)
+		end)
+		if ok and realFn then
+			OriginalGetPlatform = realFn
+			hookfunction(UIS.GetPlatform, newcclosure(function(self)
+				if SpoofEnabled then
+					return EnumPlatformMap[SpoofedDevice] or Enum.Platform.Windows
+				end
+				return OriginalGetPlatform(self)
+			end))
+		else
+			warn("[DeviceSpoof] Could not hook GetPlatform — executor may not support it")
+		end
+	else
+		if OriginalGetPlatform then
+			pcall(hookfunction, UIS.GetPlatform, OriginalGetPlatform)
+		end
+	end
+end
+
+local function EnumPlatformToString(enumVal)
+	
+	local map = {
+		[Enum.Platform.Windows]  = "Desktop",
+		[Enum.Platform.OSX]      = "Desktop",
+		[Enum.Platform.UWP]      = "Desktop",
+		[Enum.Platform.IOS]      = "Phone",
+		[Enum.Platform.Android]  = "Phone",
+		[Enum.Platform.XBoxOne]  = "Console",
+		[Enum.Platform.PS4]      = "Console",
+	}
+	return map[enumVal]
+end
+
+local OldNamecall
+OldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+	if not SpoofEnabled then return OldNamecall(self, ...) end
+
+	local method = getnamecallmethod()
+	if (method == "FireServer" or method == "InvokeServer") and
+	   (self.ClassName == "RemoteEvent" or self.ClassName == "RemoteFunction") then
+		local args = {...}
+		local changed = false
+		for i, arg in ipairs(args) do
+			-- Swap Enum.Platform values
+			if typeof(arg) == "EnumItem" and arg.EnumType == Enum.Platform then
+				args[i] = EnumPlatformMap[SpoofedDevice] or Enum.Platform.Windows
+				changed = true
+			end
+			-- Swap platform strings
+			if type(arg) == "string" and KnownPlatformStrings[arg] then
+				args[i] = StringValueMap[SpoofedDevice] or "Desktop"
+				changed = true
+			end
+		end
+		if changed then
+			return OldNamecall(self, table.unpack(args))
+		end
+	end
+
+	return OldNamecall(self, ...)
+end))
+
+local FoundValues    = {}
+local OriginalValues = {}
+
+local function ScanAndWritePlatformValues(targetString)
+	-- Fresh scan every call since server may add/rename values
+	table.clear(FoundValues)
+
+	local function scan(inst, depth)
+		if depth > 5 then return end
+		for _, child in ipairs(inst:GetChildren()) do
+			if child:IsA("StringValue") then
+				-- Target: any StringValue currently holding a known platform string
+				-- OR named something platform-related
+				local nameL = child.Name:lower()
+				local isKnown = KnownPlatformStrings[child.Value]
+				local isPlatformNamed = nameL:find("platform") or nameL:find("device")
+					or nameL:find("os") or nameL:find("input")
+				if isKnown or isPlatformNamed then
+					table.insert(FoundValues, child)
+					-- Save original once
+					if not OriginalValues[child] then
+						OriginalValues[child] = child.Value
+					end
+					-- Write our target
+					pcall(function() child.Value = targetString end)
+				end
+			end
+			if child:IsA("Folder") or child:IsA("Configuration") or child:IsA("Model") then
+				scan(child, depth + 1)
+			end
+		end
+	end
+	scan(LocalPlayer, 0)
+
+	for name, val in pairs(LocalPlayer:GetAttributes()) do
+		if type(val) == "string" then
+			local nameL = name:lower()
+			local isKnown = KnownPlatformStrings[val]
+			local isPlatformNamed = nameL:find("platform") or nameL:find("device") or nameL:find("os")
+			if isKnown or isPlatformNamed then
+				if not OriginalValues["attr_"..name] then
+					OriginalValues["attr_"..name] = val
+				end
+				pcall(function() LocalPlayer:SetAttribute(name, targetString) end)
+			end
+		end
+	end
+end
+
+local function RestoreAll()
+	for sv, orig in pairs(OriginalValues) do
+		if type(sv) == "string" then
+			-- Attribute
+			local attrName = sv:sub(6) -- strip "attr_"
+			pcall(function() LocalPlayer:SetAttribute(attrName, orig) end)
+		else
+			-- StringValue instance
+			pcall(function() sv.Value = orig end)
+		end
+	end
+end
+
+local UIS_META  = getrawmetatable(UIS)
+local OldUISIdx = rawget(UIS_META, "__index")
+
+local FakeUIS = {
+	["PC"]      = { TouchEnabled=false, GamepadEnabled=false, KeyboardEnabled=true,  MouseEnabled=true,  AccelerometerEnabled=false, GyroscopeEnabled=false },
+	["Mobile"]  = { TouchEnabled=true,  GamepadEnabled=false, KeyboardEnabled=false, MouseEnabled=false, AccelerometerEnabled=true,  GyroscopeEnabled=true  },
+	["Console"] = { TouchEnabled=false, GamepadEnabled=true,  KeyboardEnabled=false, MouseEnabled=false, AccelerometerEnabled=false, GyroscopeEnabled=false },
+}
+
+local function ApplyUISPropertyHook(on)
+	pcall(function()
+		setreadonly(UIS_META, false)
+		UIS_META.__index = on and newcclosure(function(self, key)
+			if SpoofEnabled then
+				local fv = FakeUIS[SpoofedDevice]
+				if fv and fv[key] ~= nil then return fv[key] end
+			end
+			return OldUISIdx(self, key)
+		end) or OldUISIdx
+		setreadonly(UIS_META, true)
+	end)
+end
+
+local GS      = cloneref(game:GetService("GuiService"))
+local GS_META = getrawmetatable(GS)
+local OldGSNC = rawget(GS_META, "__namecall")
+
+local function ApplyGSHook(on)
+	pcall(function()
+		setreadonly(GS_META, false)
+		GS_META.__namecall = on and newcclosure(function(self, ...)
+			if SpoofEnabled and getnamecallmethod() == "IsTenFootInterface" then
+				return SpoofedDevice == "Console"
+			end
+			return OldGSNC(self, ...)
+		end) or OldGSNC
+		setreadonly(GS_META, true)
+	end)
+end
+
+local function StartKeepAlive(targetString)
+	if KeepThread then task.cancel(KeepThread) end
+	KeepThread = task.spawn(function()
+		while SpoofEnabled do
+			ScanAndWritePlatformValues(targetString)
+			task.wait(0.5)
+		end
+	end)
+end
+
+local function StopKeepAlive()
+	if KeepThread then task.cancel(KeepThread) KeepThread = nil end
+end
+
+local function EnableSpoof(device)
+	SpoofedDevice = device
+	local targetString = StringValueMap[device] or "Desktop"
+
+	-- Apply all hooks
+	HookGetPlatform(true)
+	ApplyUISPropertyHook(true)
+	ApplyGSHook(true)
+
+	-- Immediately write any already-existing StringValues
+	ScanAndWritePlatformValues(targetString)
+
+	-- Start keep-alive
+	StartKeepAlive(targetString)
+
+	-- Notify
+	WindUI:Notify({
+		Title   = "Device Spoof ON",
+		Content = "Spoofing as: " .. device ..
+		          "\nGetPlatform hooked. StringValues patched." ..
+		          "\nEveryone in server will see: " .. device,
+		Duration = 5,
+	})
+end
+
+local function DisableSpoof()
+	StopKeepAlive()
+	HookGetPlatform(false)
+	ApplyUISPropertyHook(false)
+	ApplyGSHook(false)
+	RestoreAll()
+	WindUI:Notify({
+		Title   = "Device Spoof OFF",
+		Content = "Real platform restored.",
+		Duration = 3,
+	})
+end
+
+Tabs.Main:Section({ Title = "Device Spoofing" })
+
+Tabs.Main:Dropdown({
+	Title     = "Spoof Platform",
+	Desc      = "Choose which device icon everyone sees next to your name",
+	Values    = { "PC", "Mobile", "Console" },
+	Value     = "PC",
+	Multi     = false,
+	AllowNone = false,
+	Callback  = function(opt)
+		SpoofedDevice = opt
+		if SpoofEnabled then EnableSpoof(opt) end
+	end,
+})
+
+Tabs.Main:Toggle({
+	Title    = "Enable Device Spoof",
+	Desc     = "Makes everyone in the server see your chosen device platform",
+	Value    = false,
+	Callback = function(state)
+		SpoofEnabled = state
+		if state then EnableSpoof(SpoofedDevice) else DisableSpoof() end
+	end,
+})
