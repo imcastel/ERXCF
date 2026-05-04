@@ -1,0 +1,22 @@
+local Vehicles = cloneref(game:GetService("Workspace")):WaitForChild("Vehicles")
+local removed = {}
+
+local function removePlate(car)
+	if removed[car] then return end
+	local body = car:FindFirstChild("Body")
+	if not body then return end
+	local plate = body:FindFirstChild("LicensePlate")
+	if plate then
+		plate:Destroy()
+		removed[car] = true
+	end
+end
+
+for _, car in next, Vehicles:GetChildren() do
+	removePlate(car)
+end
+
+Vehicles.ChildAdded:Connect(function(car)
+	task.wait(0.5)
+	removePlate(car)
+end)
