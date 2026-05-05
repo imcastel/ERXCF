@@ -1,0 +1,24 @@
+local cars = workspace:FindFirstChild("Vehicles")
+
+local function clearLiveries(veh)
+    task.wait(1.5)
+    if not veh or not veh.Parent then return end
+    
+    for _, v in pairs(veh:GetDescendants()) do
+        if v:IsA("Decal") or v:IsA("Texture") then
+            v.Transparency = 1 
+        elseif v:IsA("MeshPart") and v.TextureID ~= "" then
+            v.TextureID = ""
+        end
+    end
+end
+
+if cars then
+    for _, veh in pairs(cars:GetChildren()) do
+        task.spawn(clearLiveries, veh)
+    end
+    
+    cars.ChildAdded:Connect(function(veh)
+        task.spawn(clearLiveries, veh)
+    end)
+end
