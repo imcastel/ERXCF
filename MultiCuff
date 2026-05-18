@@ -33,8 +33,8 @@ local cfg = {
     arrestKeybind      = Enum.KeyCode.K,
     panicKeybind       = Enum.KeyCode.F8,
     auraRange          = 35,
-    retryDelay         = 0.08,
-    maxAttempts        = 8,
+    retryDelay         = 0.03,
+    maxAttempts        = 15,
     arrestTimeout      = 5,
     autoCuffLoop       = true,
     autoArrest         = false,
@@ -58,8 +58,11 @@ local Settings         = RS:FindFirstChild("PrivateServers")
 local auraCircle       = nil
 local auraConn         = nil
 local teamWatchConn    = nil
+local uiReady          = false
+local activeTargets    = {}
 
 local function notify(msg)
+    if not uiReady then return end
     WindUI:Notify({ Title = "🔗 MultiCuff", Content = msg, Duration = 3 })
 end
 
@@ -118,6 +121,7 @@ end
 local function isValidTarget(p)
     if p == LocalPlayer then return false end
     if isPoliceTeam(p) then return false end
+    if p.Team and p.Team.Name == "Jail" then return false end
     if cuffedPlayers[p] then return false end
     if isDead(p) then return false end
     if isAlreadyCuffed(p) then return false end
@@ -129,7 +133,19 @@ end
 
 local function hasAnyWanted()
     for _, p in ipairs(Players:GetPlayers()) do
-        if isValidTarget(p) then return true end
+        if p ~= LocalPlayer and not isPoliceTeam(p) and isWanted(p) then
+            return true
+        end
+    end
+    return false
+end
+
+local function anyCriminalInServer()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and not isPoliceTeam(p) then
+            if p:FindFirstChild("Is_Wanted") then return true end
+            if p.Team and p.Team.Name == "Criminal" then return true end
+        end
     end
     return false
 end
@@ -253,6 +269,7 @@ local function panic()
     stopAutoWeld()
     unequipHandcuffs()
     table.clear(cuffedPlayers)
+    table.clear(activeTargets)
     sendWebhook("Panic", "N/A", 0)
     notify("🚨 Panic! MultiCuff stopped.")
     task.delay(2, function() panicActive = false end)
@@ -281,17 +298,28 @@ task.spawn(function()
 end)
 
 local pendingAttached = {}
+local notifiedCuffed  = {}
 
 local function flushAttachNotification()
     if notifyPending then return end
     notifyPending = true
     task.delay(0.5, function()
         if #pendingAttached > 0 then
-            WindUI:Notify({
-                Title    = "MultiCuff",
-                Content  = "⛓ Cuffed: " .. table.concat(pendingAttached, ", "),
-                Duration = 3,
-            })
+            local unique = {}
+            local seen = {}
+            for _, name in ipairs(pendingAttached) do
+                if not seen[name] then
+                    seen[name] = true
+                    table.insert(unique, name)
+                end
+            end
+            if uiReady then
+                WindUI:Notify({
+                    Title    = "MultiCuff",
+                    Content  = "⛓ Cuffed: " .. table.concat(unique, ", "),
+                    Duration = 3,
+                })
+            end
             table.clear(pendingAttached)
         end
         notifyPending = false
@@ -305,7 +333,7 @@ local function tryArrestPlayer(target)
     local arrested = UseHandcuffs:InvokeServer("Arrest", target, nil, true)
 
     while arrested ~= nil and (tick() - arrestStart) < cfg.arrestTimeout and isWanted(target) do
-        task.wait(0.1)
+        task.wait(0.05)
         arrested = UseHandcuffs:InvokeServer("Arrest", target, nil, true)
     end
 
@@ -317,11 +345,11 @@ end
 
 local function weldPlayer(target)
     if panicActive then return false, "Panic active" end
-    if not isValidTarget(target) then return false, "Invalid target" end
-    if not ensureHandcuffsEquipped() then return false, "No handcuffs" end
+    if not isValidTarget(target) then return false, "Invalid" end
+    if not ensureHandcuffsEquipped() then return false, "No hc" end
 
-    local myChar = getChar()
-    if not myChar then return false, "No character" end
+    if activeTargets[target] then return false, "Already running" end
+    activeTargets[target] = true
 
     local myHRP = getHRP()
     if myHRP then
@@ -329,38 +357,52 @@ local function weldPlayer(target)
         myHRP.AssemblyAngularVelocity = Vector3.zero
     end
 
-    local tHRP = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-    if tHRP then
-        myChar:PivotTo(CFrame.new(tHRP.Position + Vector3.new(3.5, 2.5, 0)))
-    end
+    local success = false
+    local startTime = tick()
 
-    task.wait(0.08)
+    while (tick() - startTime) < 4 do
+        if panicActive then activeTargets[target] = nil return false, "Panic" end
 
-    for i = 1, cfg.maxAttempts do
-        if panicActive then return false, "Panic active" end
-        ensureHandcuffsEquipped()
-        if isDead(target) then return false, "Target died" end
-        if isAlreadyCuffed(target) then return false, "Already cuffed" end
+        local char = getChar()
+        local tChar = target.Character
+        if not char or not tChar then
+            activeTargets[target] = nil
+            return false, "No char"
+        end
 
         local Response = UseHandcuffs:InvokeServer("Handcuff", target, false, true)
 
         if Response == "Success" then
-            cuffedPlayers[target] = true
-            table.insert(pendingAttached, target.Name)
-            flushAttachNotification()
+            success = true
+            break
+        end
 
-            if cfg.autoArrest then
-                task.wait(0.15)
-                task.spawn(tryArrestPlayer, target)
-            end
-
-            return true, "Success"
+        if isAlreadyCuffed(target) then
+            success = true
+            break
         end
 
         task.wait(cfg.retryDelay)
     end
 
-    return false, "Max attempts reached"
+    activeTargets[target] = nil
+
+    if success then
+        cuffedPlayers[target] = true
+        if not notifiedCuffed[target] then
+            notifiedCuffed[target] = true
+            table.insert(pendingAttached, target.Name)
+            flushAttachNotification()
+        end
+
+        if cfg.autoArrest then
+            task.spawn(tryArrestPlayer, target)
+        end
+
+        return true, "Success"
+    end
+
+    return false, "Timeout"
 end
 
 local function arrestAll()
@@ -377,11 +419,13 @@ local function arrestAll()
         count += 1
     end
 
-    WindUI:Notify({
-        Title    = "MultiCuff",
-        Content  = count > 0 and "Arresting " .. count .. " player(s)..." or "Nobody attached.",
-        Duration = 3,
-    })
+    if uiReady then
+        WindUI:Notify({
+            Title    = "MultiCuff",
+            Content  = count > 0 and "Arresting " .. count .. " player(s)..." or "Nobody attached.",
+            Duration = 3,
+        })
+    end
 end
 
 local function weldAllNearby()
@@ -390,13 +434,15 @@ local function weldAllNearby()
         local targets = {}
         local range   = tonumber(cfg.auraRange) or 35
         for _, p in ipairs(Players:GetPlayers()) do
-            if isValidTarget(p) and distanceTo(p) <= range then
+            if isValidTarget(p) and distanceTo(p) <= range and not activeTargets[p] then
                 table.insert(targets, p)
             end
         end
 
         if #targets == 0 then
-            WindUI:Notify({ Title = "MultiCuff", Content = "No valid targets nearby.", Duration = 3 })
+            if uiReady then
+                WindUI:Notify({ Title = "MultiCuff", Content = "No valid targets nearby.", Duration = 3 })
+            end
             return
         end
 
@@ -420,27 +466,91 @@ local function ServerHop()
     hopInProgress = true
     local TeleportService = game:GetService("TeleportService")
     local PlaceId = game.PlaceId
-    WindUI:Notify({ Title = "Server Hop", Content = "Looking for populated server...", Duration = 3 })
-    pcall(function()
-        local servers = HttpService:JSONDecode(game:HttpGet(
-            "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
-        local valid = {}
-        for _, v in ipairs(servers.data) do
-            if v.playing >= cfg.minServerPlayers and v.id ~= game.JobId then
-                table.insert(valid, v)
+
+    if uiReady then
+        WindUI:Notify({ Title = "Server Hop", Content = "Searching for best server...", Duration = 3 })
+    end
+
+    task.spawn(function()
+        local allServers = {}
+        local cursor = ""
+        local pages = 0
+
+        while pages < 5 do
+            if cfg.autoServerHop and anyCriminalInServer() then
+                if uiReady then
+                    WindUI:Notify({ Title = "Server Hop", Content = "Criminal detected — hop aborted.", Duration = 3 })
+                end
+                hopInProgress = false
+                return
+            end
+
+            local ok, result = pcall(function()
+                local url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100"
+                if cursor ~= "" then url = url .. "&cursor=" .. cursor end
+                return HttpService:JSONDecode(game:HttpGet(url))
+            end)
+
+            if not ok or not result or not result.data then break end
+
+            for _, v in ipairs(result.data) do
+                if v.id ~= game.JobId and v.playing >= cfg.minServerPlayers and v.playing <= v.maxPlayers - 2 then
+                    table.insert(allServers, v)
+                end
+            end
+
+            if not result.nextPageCursor or result.nextPageCursor == "" then break end
+            cursor = result.nextPageCursor
+            pages += 1
+            task.wait(0.2)
+        end
+
+        if cfg.autoServerHop and anyCriminalInServer() then
+            if uiReady then
+                WindUI:Notify({ Title = "Server Hop", Content = "Criminal detected — hop aborted.", Duration = 3 })
+            end
+            hopInProgress = false
+            return
+        end
+
+        table.sort(allServers, function(a, b) return a.playing > b.playing end)
+
+        if #allServers > 0 then
+            local maxTries = math.min(10, #allServers)
+            local success = false
+
+            for i = 1, maxTries do
+                local target = allServers[i]
+                if uiReady then
+                    WindUI:Notify({ Title = "Server Hop", Content = "Trying server " .. i .. " (" .. target.playing .. "/" .. target.maxPlayers .. ")...", Duration = 2 })
+                end
+
+                local tpOk, tpErr = pcall(function()
+                    TeleportService:TeleportToPlaceInstance(PlaceId, target.id)
+                end)
+
+                if tpOk then
+                    success = true
+                    task.wait(5)
+                    break
+                end
+
+                task.wait(1)
+            end
+
+            if not success and uiReady then
+                WindUI:Notify({ Title = "Server Hop", Content = "All teleport attempts failed.", Duration = 5 })
+            end
+        else
+            if uiReady then
+                WindUI:Notify({ Title = "Server Hop", Content = "No servers found with " .. cfg.minServerPlayers .. "+ players.", Duration = 5 })
             end
         end
-        if #valid > 0 then
-            local t = valid[math.random(1, #valid)]
-            WindUI:Notify({ Title = "Server Hop", Content = "Hopping... (" .. t.playing .. " players)", Duration = 4 })
-            TeleportService:TeleportToPlaceInstance(PlaceId, t.id)
-        else
-            WindUI:Notify({ Title = "Server Hop", Content = "No servers found. Retrying...", Duration = 5 })
-            task.wait(6)
-            hopInProgress = false
-            ServerHop()
-        end
+
+        task.wait(10)
+        hopInProgress = false
     end)
+
     task.delay(30, function() hopInProgress = false end)
 end
 
@@ -457,36 +567,54 @@ local function startAutoWeld()
             local now = tick()
             if now - lastHopCheck > 15 then
                 lastHopCheck = now
-                if not hasAnyWanted() then
+                if not anyCriminalInServer() then
                     countdownActive = true
                     task.spawn(function()
-                        for i = 3, 1, -1 do
-                            WindUI:Notify({ Title = "Server Hop",
-                                Content = "No wanted players. Hopping in " .. i .. "...", Duration = 1.2 })
-                            task.wait(1)
-                            if hasAnyWanted() then
-                                WindUI:Notify({ Title = "Server Hop",
-                                    Content = "Wanted appeared. Cancelled.", Duration = 3 })
+                        for i = 5, 1, -1 do
+                            if anyCriminalInServer() then
+                                if uiReady then
+                                    WindUI:Notify({ Title = "Server Hop",
+                                        Content = "Criminal detected — hop cancelled.", Duration = 3 })
+                                end
                                 countdownActive = false
                                 return
                             end
+                            if uiReady then
+                                WindUI:Notify({ Title = "Server Hop",
+                                    Content = "No criminals. Hopping in " .. i .. "...", Duration = 1.2 })
+                            end
+                            task.wait(1)
                         end
-                        if not hasAnyWanted() then
-                            ServerHop()
-                        else
-                            WindUI:Notify({ Title = "Server Hop", Content = "Wanted appeared. Cancelled.", Duration = 3 })
+
+                        if anyCriminalInServer() then
+                            if uiReady then
+                                WindUI:Notify({ Title = "Server Hop", Content = "Criminal detected — hop cancelled.", Duration = 3 })
+                            end
+                            countdownActive = false
+                            return
                         end
+
                         countdownActive = false
+                        ServerHop()
                     end)
                 end
             end
         end
 
-        local range = tonumber(cfg.auraRange) or 35
+        local range   = tonumber(cfg.auraRange) or 35
+        local targets = {}
+
         for _, p in ipairs(Players:GetPlayers()) do
-            if isValidTarget(p) and distanceTo(p) <= range then
-                task.spawn(weldPlayer, p)
+            if isValidTarget(p) and distanceTo(p) <= range and not activeTargets[p] then
+                table.insert(targets, p)
             end
+        end
+
+        for _, target in ipairs(targets) do
+            task.spawn(function()
+                local ok, msg = weldPlayer(target)
+                if not ok then warn("[MultiCuff] Failed: " .. target.Name .. " — " .. msg) end
+            end)
         end
     end)
 end
@@ -499,6 +627,7 @@ local function hookDeath(char)
         cfg.autoCuffLoop = false
         stopAutoWeld()
         table.clear(cuffedPlayers)
+        table.clear(activeTargets)
         notify("Died — MultiCuff disabled.")
     end)
 end
@@ -506,12 +635,24 @@ end
 if getChar() then task.spawn(hookDeath, getChar()) end
 LocalPlayer.CharacterAdded:Connect(function(char) task.spawn(hookDeath, char) end)
 
-Players.PlayerRemoving:Connect(function(p) cuffedPlayers[p] = nil end)
+Players.PlayerRemoving:Connect(function(p)
+    cuffedPlayers[p] = nil
+    activeTargets[p] = nil
+    notifiedCuffed[p] = nil
+end)
 for _, p in ipairs(Players:GetPlayers()) do
-    p.CharacterRemoving:Connect(function() cuffedPlayers[p] = nil end)
+    p.CharacterRemoving:Connect(function()
+        cuffedPlayers[p] = nil
+        activeTargets[p] = nil
+        notifiedCuffed[p] = nil
+    end)
 end
 Players.PlayerAdded:Connect(function(p)
-    p.CharacterRemoving:Connect(function() cuffedPlayers[p] = nil end)
+    p.CharacterRemoving:Connect(function()
+        cuffedPlayers[p] = nil
+        activeTargets[p] = nil
+        notifiedCuffed[p] = nil
+    end)
 end)
 
 local CONFIG_PATH = "ERX/MultiCuff_config.json"
@@ -745,4 +886,6 @@ end)
 startAutoWeld()
 startTeamWatch()
 
-notify("<b>MultiCuff Loaded!</b>\n\nH = Cuff | K = Arrest | F8 = Panic")
+task.wait(0.5)
+uiReady = true
+WindUI:Notify({ Title = "🔗 MultiCuff", Content = "<b>MultiCuff Loaded!</b>\n\nH = Cuff | K = Arrest | F8 = Panic", Duration = 3 })
